@@ -1,0 +1,34 @@
+# IDEs
+.idea/
+.vscode/
+.settings/
+.classpath
+.project
+*.iml
+
+# Build Java
+target/
+build/
+out/
+.gradle/
+*.class
+*.jar
+*.war
+*.ear
+
+# Logs
+logs/
+*.log
+
+# Arquivos temporários
+tmp/
+temp/
+*.tmp
+*.temp
+*.swp
+*.swo
+*~
+
+# Resultados experimentais: preservar apenas o marcador do diretório
+/results/*
+!/results/.gitkeep
