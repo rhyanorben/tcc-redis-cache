@@ -1,9 +1,11 @@
 package br.edu.tcc.pedidos;
 
+import br.edu.tcc.pedidos.Contratos.PaginaPedidos;
 import java.util.function.Supplier;
-import static br.edu.tcc.pedidos.Contratos.PaginaPedidos;
 
 public interface PaginaCache {
-    PaginaPedidos buscarOuCarregar(long tenant, int page, int size, Supplier<PaginaPedidos> banco);
-    void invalidar(long tenant);
+
+    PaginaPedidos buscarOuCarregar(long tenantId, int pagina, int tamanho, Supplier<PaginaPedidos> carregarDoBanco);
+
+    void invalidar(long tenantId);
 }

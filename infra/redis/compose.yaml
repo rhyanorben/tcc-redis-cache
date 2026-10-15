@@ -1,4 +1,5 @@
 name: tcc-redis
+
 services:
   redis:
     image: ${REDIS_IMAGE:?Defina REDIS_IMAGE no .env}
@@ -25,6 +26,7 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
 secrets:
   redis_password:
     file: ./secrets/redis_password.txt

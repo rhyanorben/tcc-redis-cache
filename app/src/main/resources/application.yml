@@ -25,11 +25,13 @@ spring:
     baseline-on-migrate: false
   jackson:
     time-zone: UTC
+
 server:
   port: 8080
   error:
     include-message: never
     include-stacktrace: never
+
 management:
   health:
     redis:

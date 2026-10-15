@@ -1,17 +1,13 @@
-# Cache-aside das páginas de pedidos
+# Cache das páginas de pedidos
 
-Implementado no código em 15/10/2026. Nenhuma VM foi alterada nesta etapa. Cache desligado por padrão; a API e as novas configurações Redis ainda não foram implantadas.
+Cache-aside opcional da resposta paginada inteira, implementado com Spring Data Redis/Lettuce e JSON tipado. Está desligado por padrão e ainda não foi implantado nas VMs.
 
-## Dois cenários da mesma aplicação
+| Configuração | Leitura |
+| --- | --- |
+| `CACHE_ENABLED=false` | Consulta PostgreSQL; não cria conexão Redis nem tenta invalidá-lo |
+| `CACHE_ENABLED=true` | Consulta Redis; em falta, carrega PostgreSQL e armazena a página com TTL |
 
-| Modo | Configuração | Comportamento |
-| --- | --- | --- |
-| Sem cache | `CACHE_ENABLED=false` | Consulta PostgreSQL diretamente; não cria conexão Redis nem tenta invalidá-lo. |
-| Cache-aside | `CACHE_ENABLED=true` | Tenta ler a página no Redis; em falta, consulta PostgreSQL e armazena a resposta inteira com TTL. |
-
-O endpoint, ordenação, limites e campos da resposta são os mesmos nos dois modos. Em hit não é aberta transação PostgreSQL. Em miss, empresa, conteúdo e contagem continuam usando o mesmo snapshot `REPEATABLE READ`.
-
-A consulta do banco está em `PedidoService.listar`; a seleção entre os dois caminhos está em `ConsultaPedidosService`. A implementação Redis fica em `RedisPaginaCache` e usa JSON tipado de `PaginaPedidos`, sem serialização Java de objetos.
+O contrato HTTP é igual nos dois modos. Um acerto evita a transação PostgreSQL; uma falta mantém o snapshot descrito no [contrato](IMPLEMENTACAO.md). `ConsultaPedidosService` seleciona o caminho, `PedidoService` consulta o banco e `RedisPaginaCache` implementa o cache.
 
 ## Chaves e invalidação
 
@@ -20,52 +16,49 @@ tcc:v1:tenant:{42}:pedidos:generation
 tcc:v1:tenant:{42}:pedidos:<UUID>:page:0:size:20
 ```
 
-`CACHE_NAMESPACE` identifica a versão/rodada e deve começar com `tcc:`. Empresa, versão, página e tamanho separam os resultados. A ordenação é fixa no contrato; mudar a consulta ou o formato exige um novo namespace.
+Empresa, versão UUID, página e tamanho separam os resultados. Criar um pedido ou alterar seu status troca a versão da empresa **após o commit**, invalidando logicamente suas páginas e contagens. Rollback não invalida. Páginas antigas expiram pelo TTL; não há varredura de chaves nem limpeza global. O TTL começa na gravação e não é renovado por leituras.
 
-A versão por empresa é um UUID, criado atomicamente se ausente. Depois de criar um pedido ou atualizar seu status, um evento transacional troca a versão **após o commit PostgreSQL**. Isso torna inacessíveis todas as páginas antigas da empresa, incluindo suas contagens. Rollback não invalida. Não há varredura KEYS/SCAN, limpeza global ou FLUSH no código da aplicação. As páginas antigas expiram pelo TTL.
+Scripts Lua verificam atomicamente a versão ao ler e gravar páginas. Uma consulta iniciada antes da invalidação pode retornar seu snapshot antigo, mas não preenche uma versão nova. A chave de versão não expira; se for expulsa por `allkeys-lru`, um UUID novo impede reutilizar páginas antigas.
 
-A leitura verifica versão e página atomicamente. A gravação de uma página só é aceita se a versão lida antes da consulta ainda for a atual, usando Lua. Uma consulta iniciada antes da invalidação pode terminar com seu próprio snapshot antigo, mas não repopula uma versão nova. Não há garantia de leitura linearizável entre Redis e PostgreSQL: existe uma janela entre commit e invalidação e requisições já em andamento podem terminar depois da escrita.
+## Consistência e falhas
 
-A versão não tem TTL; uma chave pequena permanece por empresa acessada, sujeita à política de expulsão do Redis. Se ela for expulsa pelo `allkeys-lru`, um UUID novo evita reutilizar páginas de uma versão anterior. As páginas possuem TTL fixo de gravação; hits não renovam a expiração.
+- Não há leitura linearizável entre PostgreSQL e Redis: existe uma janela entre commit e invalidação, e requisições em andamento podem terminar depois da escrita.
+- Erros de conexão, timeout ou conteúdo inválido levam a consulta do PostgreSQL. Erros de negócio e banco continuam sendo propagados; erros de banco e respostas 404 não são armazenados.
+- Se a invalidação falhar após commit, um marcador em memória mantém a empresa consultando o banco até reparar sua versão. Cada tentativa usa um UUID novo; a reparação remove o marcador correspondente. Uma falha prolongada mantém uma entrada por empresa afetada.
+- A reparação funciona em uma instância. Os marcadores não são duráveis nem compartilhados: um encerramento entre commit e invalidação pode deixar páginas antigas até o TTL. Não há outbox, coordenação entre instâncias ou proteção contra consultas simultâneas à mesma página fria.
+- SQL direto, geração de dados, restaurações e escritas com cache desligado não invalidam Redis. Antes de reabilitá-lo, use um namespace novo. Também troque o namespace ao mudar consulta/formato; não compare instâncias escrevendo simultaneamente na mesma base com cache ligado e desligado.
 
-## Falhas e recuperação
-
-Erros de conexão, timeout ou leitura inválida do cache não transformam uma leitura válida do banco em erro HTTP. Erros de negócio e PostgreSQL continuam propagados normalmente. Uma falha Redis após commit não desfaz a gravação já confirmada no banco.
-
-Se a invalidação falhar, a instância guarda um marcador em memória para a empresa. Antes de voltar a ler o cache dessa empresa, tenta trocar a versão; enquanto não resolver, consulta o banco. Cada tentativa usa um UUID novo, inclusive em retries de comandos que possam ter sido executados antes de um timeout. Os marcadores pendentes são removidos após recuperação bem-sucedida; durante uma falha prolongada, ocupam uma entrada por empresa afetada.
-
-Essa reparação vale para **uma instância da aplicação**, coerente com o ambiente inicial SIMT. Os marcadores não são duráveis nem compartilhados. Um encerramento entre commit e invalidação pode deixar páginas antigas até o TTL remanescente. Múltiplas instâncias exigiriam uma estratégia durável/compartilhada de invalidação; isso não foi implementado. Não há outbox nem proteção contra muitas consultas simultâneas para a mesma página fria.
-
-Escritas SQL diretas, cargas do gerador, restaurações e gravações feitas com cache desligado não publicam eventos. Antes de habilitar/reabilitar cache nesses casos, use um namespace novo para a rodada; não reutilize páginas de outro estado da base. Não execute em paralelo aplicações com cache ligado e desligado escrevendo na mesma base para comparar leituras.
-
-Redis é opcional para disponibilidade: `/actuator/health` continua avaliando PostgreSQL, sem falhar apenas pela indisponibilidade do cache. Falhas Redis são observadas pelos contadores e por um aviso limitado a um por 30 segundos por instância, sem senhas ou conteúdo de cache.
+Redis não participa de `/actuator/health`; a API depende do PostgreSQL. Falhas de cache geram contadores e um aviso limitado a um por 30 segundos por instância, sem credenciais ou conteúdo. Não há circuit breaker: durante falhas, requisições ainda podem pagar timeouts de vários comandos.
 
 ## Configuração
 
-| Variável | Padrão | Finalidade |
+| Variável | Padrão | Regra |
 | --- | --- | --- |
-| `CACHE_ENABLED` | `false` | Habilita implementação Redis. |
-| `CACHE_NAMESPACE` | `tcc:v1` | Prefixo da versão/rodada, até 64 caracteres e sem espaços. |
-| `CACHE_TTL` | `60s` | TTL das páginas; permitido de 1ms a 1h. |
-| `CACHE_TIMEOUT` | `200ms` | Timeout de conexão/comandos; permitido de 1ms a 5s. |
-| `REDIS_HOST` | `10.10.10.30` | VM Redis. |
-| `REDIS_PORT` | `6379` | Porta Redis. |
-| `REDIS_USER` | `app` | Usuário da ACL da aplicação. |
-| `REDIS_PASSWORD` | sem padrão | Obrigatória se cache habilitado; fornecida por secret. |
+| `CACHE_ENABLED` | `false` | Habilita Redis |
+| `CACHE_NAMESPACE` | `tcc:v1` | `tcc:` seguido de 1–60 letras, dígitos, `:`, `_` ou `-` |
+| `CACHE_TTL` | `60s` | De 1ms a 1h |
+| `CACHE_TIMEOUT` | `200ms` | De 1ms a 5s por conexão/comando; não limita a requisição inteira |
+| `REDIS_HOST` | `10.10.10.30` | Endereço Redis |
+| `REDIS_PORT` | `6379` | Porta Redis |
+| `REDIS_USER` | `app` | Usuário da ACL |
+| `REDIS_PASSWORD` | Sem padrão | Obrigatória com cache ativo; fornecida por secret |
 
-Os padrões são pontos de partida configuráveis, não parâmetros de desempenho já calibrados. Timeout de comando não é um limite global de latência HTTP; uma requisição pode realizar mais de um comando Redis. Não há circuit breaker; solicitações durante falhas ainda podem incorrer nos timeouts configurados.
+São valores iniciais, ainda sem calibração de desempenho.
 
-## ACL e sobreposições Docker preparadas
+## Configuração Docker preparada
 
-O script Redis mantém o usuário administrativo `default` existente. Somente quando recebe `/run/secrets/redis_app_password`, cria o usuário `app` com hash SHA-256 da senha, chaves `~tcc:*` e permissões `+@connection +get +set +eval +evalsha`. Essa credencial precisa ter ao menos 32 caracteres e ser diferente da administrativa. A ACL restringe o prefixo da aplicação, não autentica nem separa usuários finais por empresa.
+O Compose base continua sem credencial Redis da aplicação. As sobreposições adicionam:
 
-- Na VM Redis, `infra/redis/compose.app-user.yaml` adiciona o secret opcional ao Compose original.
-- Na VM app, `infra/app/compose.cache.yaml` habilita cache e monta apenas a credencial do usuário `app`, com destino `REDIS_PASSWORD`.
-- Sem essas sobreposições, a infraestrutura e a aplicação continuam no cenário anterior, sem exigir o secret Redis da aplicação.
+| Arquivo | Efeito |
+| --- | --- |
+| `infra/redis/compose.app-user.yaml` | Secret `redis_app_password` e usuário restrito `app` |
+| `infra/app/compose.cache.yaml` | Cache habilitado e secret montado como `REDIS_PASSWORD` |
 
-Quando a execução nas VMs for autorizada, será necessário gerar uma senha nova, guardá-la em `secrets/redis_app_password.txt` nas duas pastas correspondentes, com diretório 700 e arquivo legível pelo usuário do contêiner. Não coloque a senha em `.env`, YAML ou Git.
+O script Redis preserva o usuário administrativo `default`. O usuário `app` usa hash SHA-256, chaves `~tcc:*` e permissões `+@connection +get +set +eval +evalsha`. A ACL limita o prefixo da aplicação; não separa usuários finais por empresa.
 
-Para **validar a configuração**, sem iniciar serviços, execute na raiz do repositório:
+Na implantação autorizada, guarde a mesma senha nova em `secrets/redis_app_password.txt` nas pastas Redis e app. Ela deve ter ao menos 32 caracteres, diferir da administrativa e ser legível pelo usuário do contêiner, com diretório local 700. Não coloque senhas em `.env`, YAML ou Git. Primeiro valide a API sem cache; habilitar as sobreposições com `up` recria serviços e altera a ACL.
+
+Na raiz do repositório, valide apenas a configuração:
 
 ```sh
 docker compose --env-file infra/redis/.env.example \
@@ -75,27 +68,15 @@ docker compose --env-file infra/app/.env.example \
   -f infra/app/compose.yaml -f infra/app/compose.cache.yaml config --quiet
 ```
 
-Usar essas sobreposições com `up` recria serviços e altera a ACL efetiva. A instalação segue pendente de autorização; não aplique os comandos às VMs por conta desta documentação. Primeiro implante e valide a referência sem cache, depois habilite o cenário com cache e registre namespace, TTL, timeout, versão da aplicação e condições da base.
+## Métricas e testes
 
-## Métricas
+| Contador Micrometer | Significado |
+| --- | --- |
+| `tcc.cache.requests`, `result=hit\|miss\|fallback` | Acerto, falta ou desvio por falha/pendência |
+| `tcc.cache.errors` | Falhas Redis/serialização; pode haver várias por requisição |
+| `tcc.cache.invalidations` | Trocas de versão concluídas, incluindo reparações |
+| `tcc.cache.discarded_writes` | Páginas descartadas por versão alterada ou invalidação pendente |
 
-Contadores Micrometer disponíveis dentro da aplicação:
+Não há tag por empresa nem endpoint de métricas exposto por padrão. Um miss pode terminar em erro de negócio; esses contadores não equivalem a respostas HTTP bem-sucedidas. A coleta externa está pendente.
 
-- `tcc.cache.requests`, tag `result=hit|miss|fallback`: requisições atendidas pelo cache, faltas e consultas que desviaram por falha/pendência.
-- `tcc.cache.errors`: falhas de operação Redis ou serialização; pode haver mais de uma por requisição.
-- `tcc.cache.invalidations`: trocas de versão concluídas, incluindo reparações.
-- `tcc.cache.discarded_writes`: páginas cuja gravação foi descartada por alteração de versão ou invalidação pendente.
-
-404 e demais erros do banco não são armazenados. Um miss pode resultar em erro de negócio; portanto os contadores não equivalem apenas a respostas HTTP bem-sucedidas. Não há tag por empresa, para evitar crescimento da quantidade de séries. O endpoint de métricas não está exposto por padrão; a coleta externa e sua configuração ficam para a etapa de monitoramento.
-
-## Testes
-
-A suíte usa PostgreSQL e Redis descartáveis, sem conexão com as VMs. Redis é iniciado usando o script, configuração e ACL reais da infraestrutura, com senhas exclusivas dos testes. São verificados hits sem banco, equivalência da resposta, separação de empresas/páginas/tamanhos, invalidação após commit, ausência de invalidação em rollback, TTL, corrida de preenchimento, perda da chave de versão, JSON inválido, ACL e recuperação após uma pausa do contêiner Redis. O cenário sem cache verifica que não existe bean de conexão Redis.
-
-## Referências
-
-- [Spring Data Redis: execução de scripts](https://docs.spring.io/spring-data/redis/reference/redis/scripting.html).
-- [Spring Framework: eventos ligados a transações](https://docs.spring.io/spring-framework/reference/data-access/transaction/event.html).
-- [Redis: ACLs](https://redis.io/docs/latest/operate/oss_and_stack/management/security/acl/).
-
-Validação local concluída: **22 testes de integração, zero falhas e zero testes ignorados**, com PostgreSQL 17.11 e Redis 7.4.11 descartáveis. Build Java concluído e configurações Compose base/com cache validadas com `config --quiet`. O build da imagem Docker da aplicação e a implantação nas VMs permanecem pendentes.
+A suíte descartável verifica equivalência da resposta, acertos sem banco, separação por empresa/página/tamanho, commit, rollback, TTL, corridas de preenchimento, perda de versão, JSON inválido, ACL e recuperação após pausa do Redis. O cenário sem cache verifica ausência de conexão Redis. Execução: [app/README.md](../app/README.md).

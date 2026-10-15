@@ -6,7 +6,6 @@ PartOf=docker.service
 
 [Service]
 Type=oneshot
-# Use postgres na tcc-postgres; redis na tcc-redis.
 ExecStart=/usr/local/sbin/tcc-restrict-service postgres
 RemainAfterExit=yes
 

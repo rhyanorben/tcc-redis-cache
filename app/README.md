@@ -1,26 +1,30 @@
-# API de pedidos — cache opcional
+# API de pedidos
 
-Modelo e contrato: [docs/IMPLEMENTACAO.md](../docs/IMPLEMENTACAO.md). Implantação planejada: [infra/app/README.md](../infra/app/README.md).
+[Modelo e contrato](../docs/IMPLEMENTACAO.md) · [Cache](../docs/CACHE.md) · [Implantação](../infra/app/README.md)
 
 ## Compilar e testar
 
-Requer Java 21, Maven 3.6.3+, Python 3 (para verificar o gerador de dados) e Docker acessível para Testcontainers:
+Na raiz do repositório, com Java 21, Maven 3.6.3+, Python 3 e Docker acessível:
 
 ```sh
 mvn -f app/pom.xml verify
 ```
 
-Os testes iniciam um PostgreSQL descartável e independente das VMs, aplicam a migração e fazem requisições HTTP reais. Usam usuário runtime sem DDL e migrador separado. Não configuram credenciais reais nem acessam os IPs experimentais. A suíte também usa Redis descartável com a ACL e o script reais do projeto para verificar o cache opcional. Não omitem testes silenciosamente quando Docker está indisponível.
+A suíte usa HTTP real, PostgreSQL e Redis descartáveis. Verifica usuários separados de migração e execução, isolamento por empresa, paginação, integridade e cache com a ACL real do projeto. Não acessa as VMs e falha se Docker estiver indisponível.
 
-Para executar fora de Docker, em ambiente já provisionado, configure `DB_URL`, `DB_USER` e `DB_PASSWORD` por um mecanismo local seguro e use:
+## Executar
+
+Em ambiente já provisionado, forneça `DB_URL`, `DB_USER` e `DB_PASSWORD` por um mecanismo local seguro:
 
 ```sh
 java -jar app/target/pedidos-0.1.0-SNAPSHOT.jar
 ```
 
-Flyway fica desabilitado na execução comum. Para aplicar migrações, use credenciais do migrador com `FLYWAY_ENABLED=true` e `SPRING_MAIN_WEB_APPLICATION_TYPE=none`, em uma execução separada antes de iniciar a API. Não use `tcc_admin` como usuário runtime. O Compose fornece `DB_PASSWORD` por arquivo secret, sem senha no YAML.
+O padrão usa `tcc_app`, sem executar Flyway ou conectar ao Redis. As migrações usam `tcc_migrator` numa execução separada com `FLYWAY_ENABLED=true` e `SPRING_MAIN_WEB_APPLICATION_TYPE=none`. O [Compose](../infra/app/README.md) fornece as senhas por arquivos secret.
 
-Exemplo após implantação, usando IDs reais retornados pela criação:
+## Exemplos HTTP
+
+Após implantação, substitua os IDs `1` pelos IDs retornados na criação da empresa e do cliente:
 
 ```sh
 curl -i -X POST http://10.10.10.10:8080/api/empresas \
@@ -34,9 +38,9 @@ curl -i -X POST http://10.10.10.10:8080/api/pedidos \
   -d '{"clienteId":1,"itens":[{"descricao":"Item A","quantidade":2,"precoUnitario":12.35}]}'
 
 curl -i 'http://10.10.10.10:8080/api/pedidos?page=0&size=20' -H 'X-Tenant-Id: 1'
+
+curl -i -X PATCH http://10.10.10.10:8080/api/pedidos/1/status \
+  -H 'X-Tenant-Id: 1' -H 'Content-Type: application/json' -d '{"status":"CONFIRMADO"}'
 ```
 
-
-## Cenários sem/com cache
-
-Cache desligado por padrão, sem conexão Redis. A mesma API possui cache-aside opcional das páginas de pedidos. Consulte [docs/CACHE.md](../docs/CACHE.md) para variáveis, invalidação, métricas, testes e limites de consistência. A integração foi implementada no código e ainda não foi aplicada às VMs.
+O último exemplo também exige o ID do pedido criado. O cabeçalho seleciona a empresa do laboratório; não autentica usuários.

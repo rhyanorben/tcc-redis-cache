@@ -1,125 +1,215 @@
 package br.edu.tcc.pedidos;
 
+import br.edu.tcc.pedidos.Contratos.PaginaPedidos;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
-import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import java.util.*;
+import java.time.Duration;
+import java.util.List;
+import java.util.Map;
+import java.util.Optional;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Supplier;
-import org.slf4j.*;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
-import static br.edu.tcc.pedidos.Contratos.PaginaPedidos;
 
 public class RedisPaginaCache implements PaginaCache {
-    private static final Logger LOG = LoggerFactory.getLogger(RedisPaginaCache.class);
-    private static final DefaultRedisScript<String> GENERATION = script("generation", String.class);
-    private static final DefaultRedisScript<String> READ = script("read-page", String.class);
-    private static final DefaultRedisScript<Long> WRITE = script("write-page", Long.class);
-    private final StringRedisTemplate redis;
-    private final ObjectMapper mapper;
-    private final CacheProperties config;
-    private final Counter hit, miss, fallback, error, invalidation, discarded;
-    private final Map<Long, Object> pending = new ConcurrentHashMap<>();
-    private final AtomicLong nextWarning = new AtomicLong();
 
-    public RedisPaginaCache(StringRedisTemplate redis, ObjectMapper mapper, CacheProperties config, MeterRegistry meters) {
-        this.redis = redis; this.mapper = mapper; this.config = config;
-        hit = meters.counter("tcc.cache.requests", "result", "hit");
-        miss = meters.counter("tcc.cache.requests", "result", "miss");
-        fallback = meters.counter("tcc.cache.requests", "result", "fallback");
-        error = meters.counter("tcc.cache.errors");
-        invalidation = meters.counter("tcc.cache.invalidations");
-        discarded = meters.counter("tcc.cache.discarded_writes");
+    private static final Logger LOGGER = LoggerFactory.getLogger(RedisPaginaCache.class);
+    private static final long INTERVALO_ENTRE_AVISOS_NANOS = Duration.ofSeconds(30).toNanos();
+    private static final DefaultRedisScript<String> OBTER_VERSAO = carregarScript("generation", String.class);
+    private static final DefaultRedisScript<String> LER_PAGINA = carregarScript("read-page", String.class);
+    private static final DefaultRedisScript<Long> GRAVAR_PAGINA = carregarScript("write-page", Long.class);
+
+    private final StringRedisTemplate redisTemplate;
+    private final ObjectMapper objectMapper;
+    private final CacheProperties properties;
+    private final MetricasCache metricas;
+    private final Map<Long, Object> invalidacoesPendentes = new ConcurrentHashMap<>();
+    private final AtomicLong proximoAvisoNanos = new AtomicLong();
+
+    public RedisPaginaCache(
+            StringRedisTemplate redisTemplate,
+            ObjectMapper objectMapper,
+            CacheProperties properties,
+            MeterRegistry meterRegistry) {
+        this.redisTemplate = redisTemplate;
+        this.objectMapper = objectMapper;
+        this.properties = properties;
+        this.metricas = new MetricasCache(meterRegistry);
     }
-    private static <T> DefaultRedisScript<T> script(String name, Class<T> type) {
+
+    @Override
+    public PaginaPedidos buscarOuCarregar(
+            long tenantId,
+            int pagina,
+            int tamanho,
+            Supplier<PaginaPedidos> carregarDoBanco) {
+        var leituraCache = tentarLerPagina(tenantId, pagina, tamanho);
+
+        if (leituraCache.isEmpty()) {
+            metricas.registrarConsultaAoBancoPorFalha();
+            return carregarDoBanco.get();
+        }
+
+        var leitura = leituraCache.get();
+        if (leitura.paginaArmazenada().isPresent()) {
+            metricas.registrarAcerto();
+            return leitura.paginaArmazenada().get();
+        }
+
+        metricas.registrarAusencia();
+        var paginaConsultada = carregarDoBanco.get();
+        tentarArmazenarPagina(tenantId, leitura, paginaConsultada);
+        return paginaConsultada;
+    }
+
+    @Override
+    public void invalidar(long tenantId) {
+        var marcadorInvalidacao = new Object();
+        invalidacoesPendentes.put(tenantId, marcadorInvalidacao);
+
+        try {
+            renovarVersao(tenantId);
+            invalidacoesPendentes.remove(tenantId, marcadorInvalidacao);
+        } catch (RuntimeException exception) {
+            registrarFalha(exception);
+        }
+    }
+
+    private Optional<LeituraCache> tentarLerPagina(long tenantId, int pagina, int tamanho) {
+        try {
+            if (!repararInvalidacaoPendente(tenantId)) {
+                return Optional.empty();
+            }
+
+            String versao = obterOuCriarVersao(tenantId);
+            String chavePagina = chavePagina(tenantId, versao, pagina, tamanho);
+            String jsonPagina = redisTemplate.execute(
+                    LER_PAGINA,
+                    List.of(chaveVersao(tenantId), chavePagina),
+                    versao);
+            var paginaArmazenada = deserializarPagina(jsonPagina, pagina, tamanho);
+
+            return Optional.of(new LeituraCache(versao, chavePagina, paginaArmazenada));
+        } catch (RuntimeException exception) {
+            registrarFalha(exception);
+            return Optional.empty();
+        }
+    }
+
+    private String obterOuCriarVersao(long tenantId) {
+        String versao = redisTemplate.execute(
+                OBTER_VERSAO,
+                List.of(chaveVersao(tenantId)),
+                UUID.randomUUID().toString());
+
+        if (versao == null) {
+            throw new IllegalStateException("Redis não retornou a versão do cache");
+        }
+
+        return versao;
+    }
+
+    private Optional<PaginaPedidos> deserializarPagina(String jsonPagina, int pagina, int tamanho) {
+        if (jsonPagina == null) {
+            return Optional.empty();
+        }
+
+        try {
+            var paginaArmazenada = objectMapper.readValue(jsonPagina, PaginaPedidos.class);
+            if (paginaArmazenada == null
+                    || paginaArmazenada.content() == null
+                    || paginaArmazenada.page() != pagina
+                    || paginaArmazenada.size() != tamanho) {
+                throw new IllegalArgumentException("Página de cache inválida");
+            }
+
+            return Optional.of(paginaArmazenada);
+        } catch (JsonProcessingException | IllegalArgumentException exception) {
+            registrarFalha(exception);
+            return Optional.empty();
+        }
+    }
+
+    private void tentarArmazenarPagina(long tenantId, LeituraCache leitura, PaginaPedidos pagina) {
+        if (invalidacoesPendentes.containsKey(tenantId)) {
+            metricas.registrarGravacaoDescartada();
+            return;
+        }
+
+        try {
+            Long paginaArmazenada = redisTemplate.execute(
+                    GRAVAR_PAGINA,
+                    List.of(chaveVersao(tenantId), leitura.chavePagina()),
+                    leitura.versao(),
+                    objectMapper.writeValueAsString(pagina),
+                    Long.toString(properties.ttl().toMillis()));
+
+            if (!Long.valueOf(1).equals(paginaArmazenada)) {
+                metricas.registrarGravacaoDescartada();
+            }
+        } catch (RuntimeException | JsonProcessingException exception) {
+            registrarFalha(exception);
+        }
+    }
+
+    private boolean repararInvalidacaoPendente(long tenantId) {
+        Object marcadorInvalidacao = invalidacoesPendentes.get(tenantId);
+        if (marcadorInvalidacao == null) {
+            return true;
+        }
+
+        renovarVersao(tenantId);
+        invalidacoesPendentes.remove(tenantId, marcadorInvalidacao);
+        return !invalidacoesPendentes.containsKey(tenantId);
+    }
+
+    private void renovarVersao(long tenantId) {
+        redisTemplate.opsForValue().set(chaveVersao(tenantId), UUID.randomUUID().toString());
+        metricas.registrarInvalidacao();
+    }
+
+    private String chaveVersao(long tenantId) {
+        return prefixoEmpresa(tenantId) + "generation";
+    }
+
+    private String chavePagina(long tenantId, String versao, int pagina, int tamanho) {
+        return prefixoEmpresa(tenantId) + versao + ":page:" + pagina + ":size:" + tamanho;
+    }
+
+    private String prefixoEmpresa(long tenantId) {
+        return properties.namespace() + ":tenant:{" + tenantId + "}:pedidos:";
+    }
+
+    private void registrarFalha(Exception exception) {
+        metricas.registrarFalha();
+
+        long agoraNanos = System.nanoTime();
+        long proximoAviso = proximoAvisoNanos.get();
+        if (agoraNanos >= proximoAviso
+                && proximoAvisoNanos.compareAndSet(proximoAviso, agoraNanos + INTERVALO_ENTRE_AVISOS_NANOS)) {
+            LOGGER.warn(
+                    "Cache indisponível ou inválido ({}); operação seguirá pelo PostgreSQL.",
+                    exception.getClass().getSimpleName());
+        }
+    }
+
+    private static <T> DefaultRedisScript<T> carregarScript(String nome, Class<T> tipoResultado) {
         var script = new DefaultRedisScript<T>();
-        script.setLocation(new ClassPathResource("cache/" + name + ".lua"));
-        script.setResultType(type);
+        script.setLocation(new ClassPathResource("cache/" + nome + ".lua"));
+        script.setResultType(tipoResultado);
         return script;
     }
-    private String base(long tenant) { return config.namespace() + ":tenant:{" + tenant + "}:pedidos:"; }
-    private String generationKey(long tenant) { return base(tenant) + "generation"; }
-    private String pageKey(long tenant, String generation, int page, int size) {
-        return base(tenant) + generation + ":page:" + page + ":size:" + size;
-    }
-    @Override
-    public PaginaPedidos buscarOuCarregar(long tenant, int page, int size, Supplier<PaginaPedidos> banco) {
-        String generation;
-        String key;
-        try {
-            if (!repair(tenant)) {
-                throw new InvalidacaoPendente();
-            }
-            generation = redis.execute(GENERATION, List.of(generationKey(tenant)), UUID.randomUUID().toString());
-            if (generation == null) throw new IllegalStateException("Redis não retornou a versão do cache");
-            key = pageKey(tenant, generation, page, size);
-            var cached = redis.execute(READ, List.of(generationKey(tenant), key), generation);
-            if (cached != null) {
-                try {
-                    var result = mapper.readValue(cached, PaginaPedidos.class);
-                    if (result == null || result.content() == null || result.page() != page || result.size() != size)
-                        throw new IllegalArgumentException("Página de cache inválida");
-                    hit.increment();
-                    return result;
-                } catch (JsonProcessingException | IllegalArgumentException ex) {
-                    failed(ex); // Recarrega e substitui somente esta página após a consulta.
-                }
-            }
-        } catch (InvalidacaoPendente ex) {
-            fallback.increment();
-            return banco.get();
-        } catch (RuntimeException ex) {
-            failed(ex);
-            fallback.increment();
-            return banco.get();
-        }
-        miss.increment();
-        // Exceções de negócio/banco não são capturadas como falhas do Redis.
-        var result = banco.get();
-        try {
-            if (pending.containsKey(tenant)) {
-                discarded.increment();
-            } else {
-                Long stored = redis.execute(WRITE, List.of(generationKey(tenant), key), generation,
-                        mapper.writeValueAsString(result), Long.toString(config.ttl().toMillis()));
-                if (!Long.valueOf(1).equals(stored)) discarded.increment();
-            }
-        } catch (RuntimeException | JsonProcessingException ex) { failed(ex); }
-        return result;
-    }
-    @Override
-    public void invalidar(long tenant) {
-        // Marca antes da tentativa. Remove apenas o marcador que esta tentativa resolveu.
-        var marker = new Object();
-        pending.put(tenant, marker);
-        try {
-            rotate(tenant);
-            pending.remove(tenant, marker);
-        } catch (RuntimeException ex) { failed(ex); }
-    }
-    private boolean repair(long tenant) {
-        Object marker = pending.get(tenant);
-        if (marker == null) return true;
-        rotate(tenant);
-        pending.remove(tenant, marker);
-        return !pending.containsKey(tenant);
-    }
-    private void rotate(long tenant) {
-        // Cada tentativa usa um UUID novo: retries não ressuscitam versões antigas.
-        redis.opsForValue().set(generationKey(tenant), UUID.randomUUID().toString());
-        invalidation.increment();
-    }
-    private static class InvalidacaoPendente extends RuntimeException {}
 
-    private void failed(Exception ex) {
-        error.increment();
-        long now = System.nanoTime();
-        long next = nextWarning.get();
-        if (now >= next && nextWarning.compareAndSet(next, now + java.time.Duration.ofSeconds(30).toNanos()))
-            LOG.warn("Cache indisponível ou inválido ({}); operação seguirá pelo PostgreSQL.", ex.getClass().getSimpleName());
+    private record LeituraCache(
+            String versao,
+            String chavePagina,
+            Optional<PaginaPedidos> paginaArmazenada) {
     }
 }

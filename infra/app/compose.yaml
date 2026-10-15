@@ -1,4 +1,5 @@
 name: tcc-app
+
 services:
   app:
     image: tcc-pedidos:0.1.0
@@ -20,6 +21,7 @@ services:
       options:
         max-size: 10m
         max-file: "3"
+
   migrate:
     image: tcc-pedidos:0.1.0
     build: ../../app
@@ -34,6 +36,7 @@ services:
     secrets:
       - source: migration_password
         target: DB_PASSWORD
+
 secrets:
   app_password:
     file: ./secrets/app_password.txt

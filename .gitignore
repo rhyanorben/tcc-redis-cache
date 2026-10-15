@@ -1,4 +1,3 @@
-# IDEs
 .idea/
 .vscode/
 .settings/
@@ -6,7 +5,6 @@
 .project
 *.iml
 
-# Build Java
 target/
 build/
 out/
@@ -16,11 +14,9 @@ out/
 *.war
 *.ear
 
-# Logs
 logs/
 *.log
 
-# Arquivos temporários
 tmp/
 temp/
 *.tmp
@@ -29,14 +25,10 @@ temp/
 *.swo
 *~
 
-# Resultados experimentais: preservar apenas o marcador do diretório
 /results/*
 !/results/.gitkeep
 
 **/.env
-
 **/secrets/
-
 **/__pycache__/
-
 **/*.pyc

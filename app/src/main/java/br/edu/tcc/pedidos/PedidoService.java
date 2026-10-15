@@ -1,52 +1,87 @@
 package br.edu.tcc.pedidos;
 
+import br.edu.tcc.pedidos.Contratos.AlterarStatus;
+import br.edu.tcc.pedidos.Contratos.Cliente;
+import br.edu.tcc.pedidos.Contratos.Empresa;
+import br.edu.tcc.pedidos.Contratos.NovaEmpresa;
+import br.edu.tcc.pedidos.Contratos.NovoCliente;
+import br.edu.tcc.pedidos.Contratos.NovoPedido;
+import br.edu.tcc.pedidos.Contratos.PaginaPedidos;
+import br.edu.tcc.pedidos.Contratos.PedidoResumo;
+import org.springframework.context.ApplicationEventPublisher;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
 import org.springframework.web.server.ResponseStatusException;
-import static br.edu.tcc.pedidos.Contratos.*;
 
 @Service
 public class PedidoService {
-    private final PedidoRepository repository;
-    private final org.springframework.context.ApplicationEventPublisher events;
-    public PedidoService(PedidoRepository repository, org.springframework.context.ApplicationEventPublisher events) {
-        this.repository = repository;
-        this.events = events;
+
+    private final PedidoRepository pedidoRepository;
+    private final ApplicationEventPublisher eventPublisher;
+
+    public PedidoService(PedidoRepository pedidoRepository, ApplicationEventPublisher eventPublisher) {
+        this.pedidoRepository = pedidoRepository;
+        this.eventPublisher = eventPublisher;
     }
 
-    private void exigirEmpresa(long tenant) {
-        if (!repository.empresaExiste(tenant)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Empresa não encontrada");
+    @Transactional
+    public Empresa criarEmpresa(NovaEmpresa novaEmpresa) {
+        return pedidoRepository.criarEmpresa(novaEmpresa.nome().trim());
     }
+
     @Transactional
-    public Empresa criarEmpresa(NovaEmpresa request) { return repository.criarEmpresa(request.nome().trim()); }
-    @Transactional
-    public Cliente criarCliente(long tenant, NovoCliente request) {
-        exigirEmpresa(tenant);
-        return repository.criarCliente(tenant, request.nome().trim());
+    public Cliente criarCliente(long tenantId, NovoCliente novoCliente) {
+        exigirEmpresaExistente(tenantId);
+        return pedidoRepository.criarCliente(tenantId, novoCliente.nome().trim());
     }
+
     @Transactional
-    public PedidoResumo criarPedido(long tenant, NovoPedido request) {
-        exigirEmpresa(tenant);
-        if (!repository.clienteExiste(tenant, request.clienteId()))
-            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Cliente não encontrado nesta empresa");
-        var pedido = repository.buscar(tenant, repository.criarPedido(tenant, request));
-        events.publishEvent(new PedidosAlterados(tenant));
+    public PedidoResumo criarPedido(long tenantId, NovoPedido novoPedido) {
+        exigirEmpresaExistente(tenantId);
+        exigirClienteDaEmpresa(tenantId, novoPedido.clienteId());
+
+        long pedidoId = pedidoRepository.criarPedido(tenantId, novoPedido);
+        var pedido = pedidoRepository.buscar(tenantId, pedidoId);
+        publicarAlteracaoPedidos(tenantId);
         return pedido;
     }
-    // Conteúdo e contagem observam o mesmo snapshot, inclusive sob escritas concorrentes.
+
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
-    public PaginaPedidos listar(long tenant, int page, int size) {
-        exigirEmpresa(tenant);
-        return PaginaPedidos.of(repository.listar(tenant, page, size), page, size, repository.contar(tenant));
+    public PaginaPedidos listar(long tenantId, int pagina, int tamanho) {
+        exigirEmpresaExistente(tenantId);
+
+        var pedidos = pedidoRepository.listar(tenantId, pagina, tamanho);
+        long totalPedidos = pedidoRepository.contar(tenantId);
+        return PaginaPedidos.of(pedidos, pagina, tamanho, totalPedidos);
     }
+
     @Transactional
-    public PedidoResumo alterarStatus(long tenant, long pedido, AlterarStatus request) {
-        if (repository.alterarStatus(tenant, pedido, request.status()) == 0)
+    public PedidoResumo alterarStatus(long tenantId, long pedidoId, AlterarStatus alteracao) {
+        int pedidosAtualizados = pedidoRepository.alterarStatus(tenantId, pedidoId, alteracao.status());
+        if (pedidosAtualizados == 0) {
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado nesta empresa");
-        var atualizado = repository.buscar(tenant, pedido);
-        events.publishEvent(new PedidosAlterados(tenant));
-        return atualizado;
+        }
+
+        var pedidoAtualizado = pedidoRepository.buscar(tenantId, pedidoId);
+        publicarAlteracaoPedidos(tenantId);
+        return pedidoAtualizado;
+    }
+
+    private void exigirEmpresaExistente(long tenantId) {
+        if (!pedidoRepository.empresaExiste(tenantId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Empresa não encontrada");
+        }
+    }
+
+    private void exigirClienteDaEmpresa(long tenantId, long clienteId) {
+        if (!pedidoRepository.clienteExiste(tenantId, clienteId)) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Cliente não encontrado nesta empresa");
+        }
+    }
+
+    private void publicarAlteracaoPedidos(long tenantId) {
+        eventPublisher.publishEvent(new PedidosAlterados(tenantId));
     }
 }

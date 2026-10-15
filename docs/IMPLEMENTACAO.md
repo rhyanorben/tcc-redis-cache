@@ -1,10 +1,6 @@
-# Aplicação e experimento: pedidos paginados por empresa
+# Modelo e contrato da API
 
-## Decisões aprovadas
-
-Entidades: empresa, cliente, pedido e item_pedido. A operação principal é **listar os pedidos de uma empresa com paginação**. A consulta de detalhes não é a operação de referência.
-
-A primeira implementação usa Java 21, Spring Boot 3.5.16, JDBC, PostgreSQL e Flyway. SQL explícito torna visíveis a consulta paginada e a contagem que serão medidas. Os records Java representam os contratos e resultados; o modelo relacional é definido pelas migrações. A referência sem cache continua sendo o padrão. O cache-aside opcional já está implementado no código, conforme [CACHE.md](CACHE.md), mas ainda não foi implantado.
+Java 21, Spring Boot, JDBC e Flyway. SQL explícito permite avaliar a consulta paginada e sua contagem. A aplicação compartilha banco e schema entre empresas, com `tenant_id` nas tabelas de negócio.
 
 ## Modelo
 
@@ -16,95 +12,67 @@ erDiagram
     pedido ||--|{ item_pedido : contem
 ```
 
-- `empresa`: identificador, nome e data de criação.
-- `cliente`: identificador, `tenant_id`, nome e data de criação.
-- `pedido`: identificador, `tenant_id`, cliente, status, total, criação e atualização.
-- `item_pedido`: identificador, `tenant_id`, pedido, descrição, quantidade e preço unitário.
+| Entidade | Dados principais |
+| --- | --- |
+| empresa | ID, nome e criação |
+| cliente | ID, empresa, nome e criação |
+| pedido | ID, empresa, cliente, status, total, criação e atualização |
+| item_pedido | ID, empresa, pedido, descrição, quantidade e preço unitário |
 
-`tenant_id` referencia `empresa.id`. FKs compostas impedem que um pedido use um cliente de outra empresa ou que um item pertença a um pedido de outra empresa. Os identificadores são globais. Valores monetários usam `numeric` e `BigDecimal`; o total é calculado pela aplicação, sem aceitar total informado pelo cliente. Um pedido criado pela API possui de 1 a 100 itens; o banco não impõe a cardinalidade mínima de itens sozinho. A criação é transacional. Nesta etapa os itens não são editáveis; somente o status do pedido pode mudar, sem fluxo de transição obrigatório.
+`tenant_id` referencia `empresa.id`; os IDs são globais. Chaves estrangeiras compostas impedem vínculos entre empresas. A API cria pedidos transacionalmente com 1–100 itens e calcula o total usando `BigDecimal` e `numeric`. O banco não garante sozinho a quantidade mínima de itens. Itens não são editáveis; o status pode mudar entre `ABERTO`, `CONFIRMADO` e `CANCELADO`, sem regras de transição.
 
-## Contrato principal
+## Listagem avaliada
 
 ```http
 GET /api/pedidos?page=0&size=20
 X-Tenant-Id: 1
 ```
 
-```json
-{
-  "content": [
-    {
-      "id": 123,
-      "clienteId": 10,
-      "clienteNome": "Cliente A",
-      "status": "ABERTO",
-      "total": 24.70,
-      "criadoEm": "2026-01-01T10:00:00Z"
-    }
-  ],
-  "page": 0,
-  "size": 20,
-  "totalElements": 1,
-  "totalPages": 1,
-  "first": true,
-  "last": true
-}
-```
+A resposta contém `content` com resumos (`id`, `clienteId`, `clienteNome`, `status`, `total`, `criadoEm`), além de `page`, `size`, `totalElements`, `totalPages`, `first` e `last`.
 
-- Página começa em zero. Padrão: 20 registros. Tamanho permitido: 1–100. Página permitida: 0–1.000.000.
-- Ordem fixa: `criado_em DESC, id DESC`. O ID desempata pedidos criados no mesmo instante.
-- Lista contém resumos, sem carregar todos os itens de cada pedido. Cliente e pedido são unidos por empresa e identificador na mesma consulta.
-- Consulta da página usa `LIMIT/OFFSET`; contagem exata usa `COUNT(*)` filtrado pela mesma empresa. Há também uma consulta curta para validar a existência da empresa.
-- As três leituras usam uma transação de leitura `REPEATABLE READ`: conteúdo e contagem pertencem ao mesmo snapshot. Páginas pedidas em requisições diferentes podem mudar sob inserções concorrentes.
-- Empresa inexistente retorna 404. Empresa sem pedidos retorna lista vazia e total zero. Página além do fim retorna lista vazia e mantém o total real.
-- Empresa ausente/inválida, página inválida ou tamanho fora do intervalo retornam 400.
-- O índice `(tenant_id, criado_em DESC, id DESC)` atende ao filtro e à ordem. OFFSET e contagem exata podem aumentar o custo conforme a base cresce; isso faz parte da operação estudada.
+| Parâmetro | Regra |
+| --- | --- |
+| `X-Tenant-Id` | ID positivo da empresa |
+| `page` | Base zero; padrão 0; máximo 1.000.000 |
+| `size` | De 1 a 100; padrão 20 |
+| Ordenação | `criado_em DESC, id DESC` |
 
-`X-Tenant-Id` seleciona a empresa no laboratório. Não autentica o usuário: quem controla o cabeçalho pode selecionar outra empresa. Os testes comprovam que consultas e vínculos respeitam o contexto informado; autorização de usuários e RLS não estão implementados. Restrinja a API à rede experimental confiável. Criação de empresas também é uma operação de preparação do laboratório.
+A consulta usa `LIMIT/OFFSET`, une cliente e pedido por empresa e ID, e não carrega itens. A validação da empresa, a página e o `COUNT(*)` usam uma transação de leitura `REPEATABLE READ`; conteúdo e total compartilham o mesmo snapshot. Requisições para páginas diferentes podem observar mudanças concorrentes. O índice `(tenant_id, criado_em DESC, id DESC)` atende ao filtro e à ordem; OFFSET e contagem exata podem ficar mais caros com o crescimento da base.
+
+Empresa inexistente retorna 404. Empresa sem pedidos ou página além do fim retorna conteúdo vazio, preservando o total real. Cabeçalho ausente/inválido e paginação inválida retornam 400.
+
+`X-Tenant-Id` seleciona a empresa no laboratório e pode ser alterado pelo cliente. Autenticação, autorização de usuários e RLS não estão implementados. Os testes verificam o isolamento conforme o contexto informado; use a API apenas na rede experimental confiável.
 
 ## Operações auxiliares
 
-| Método | Rota | Corpo e resultado |
+| Método | Rota | Entrada e resultado |
 | --- | --- | --- |
-| POST | `/api/empresas` | `{"nome":"Empresa A"}` → 201 com identificador |
-| POST | `/api/clientes` | `{"nome":"Cliente A"}` + tenant → 201 |
+| POST | `/api/empresas` | `{"nome":"Empresa A"}` → 201 com ID |
+| POST | `/api/clientes` | Nome + tenant → 201 com ID |
 | POST | `/api/pedidos` | Cliente e itens + tenant → 201 com resumo |
 | PATCH | `/api/pedidos/{id}/status` | `{"status":"CONFIRMADO"}` + tenant → resumo atualizado |
-| GET | `/actuator/health` | Saúde HTTP e conexão com o banco; sem detalhes de credenciais |
+| GET | `/actuator/health` | Saúde da API e PostgreSQL, sem detalhes de credenciais |
 
-Status: `ABERTO`, `CONFIRMADO`, `CANCELADO`. Não há exclusão, frontend ou integração de pagamento.
-
-## Caminho de implementação
-
-1. **Concluído localmente:** schema, migração inicial, API sem cache, isolamento por contexto, paginação, configuração Docker e testes de integração PostgreSQL.
-2. **Preparado para execução autorizada nas VMs:** criar roles, aplicar migrações, implantar API e gerar dados experimentais. Esses passos modificam o ambiente e não foram executados neste incremento.
-3. **Implementado localmente:** cache-aside da resposta paginada inteira, namespace/empresa/página/tamanho, TTL, invalidação por versão após commit, fallback e testes de corridas. Permanece desligado por padrão; ver [CACHE.md](CACHE.md).
-4. **Referência experimental:** revisar planos com dados representativos, controlar estatísticas do banco e medir modo sem cache. Depois comparar o mesmo endpoint com cache frio/aquecido e mesmos parâmetros.
-5. **Carga externa:** configurar segundo computador/k6, executar repetições e registrar p50/p95/p99, throughput, erros e recursos. Variar também a distribuição de empresas e páginas acessadas, pois ela afeta a taxa de acertos do cache.
+Veja [exemplos HTTP](../app/README.md). Não há exclusão, frontend ou pagamentos. O [cache opcional](CACHE.md) preserva o mesmo contrato.
 
 ## Dados reproduzíveis
 
-O gerador apenas escreve um arquivo SQL novo; não conecta ao PostgreSQL:
+Na raiz do repositório:
 
 ```sh
 python3 scripts/gerar_base.py --empresas 10 --clientes-por-empresa 20 \
   --pedidos-por-empresa 10000 --lote exp-001 --saida /tmp/tcc-exp-001.sql
 ```
 
-Isso representa 100.000 pedidos, cada um com um item de R$ 10,00. Clientes são distribuídos de forma cíclica; datas são determinísticas e a distribuição é uniforme. Esse conjunto inicial não representa todas as cargas reais de um SaaS. Registre o lote e os IDs retornados; não presuma que empresas começam em 1. A transação recusa um lote já existente, sem apagar dados. Não execute duas cargas simultâneas: o bloqueio por nome é uma proteção operacional, não uma chave única de idempotência concorrente.
+O gerador cria um arquivo SQL novo, sem conexão com o banco: 100.000 pedidos, um item de R$ 10,00 por pedido, clientes distribuídos ciclicamente e datas determinísticas. Essa distribuição uniforme é uma carga inicial; não representa todos os padrões de um SaaS.
 
-Aplicação do SQL deve ocorrer separadamente e com confirmação, como `tcc_migrator`, via `psql -X -v ON_ERROR_STOP=1 -f ARQUIVO`. Esse usuário é proprietário das tabelas e pode executar ANALYZE. Aumente os volumes gradualmente e confira espaço em disco; gerar o arquivo não avalia a capacidade das VMs.
+Após revisão e confirmação, aplique o arquivo como `tcc_migrator`, proprietário das tabelas, com `psql -X -v ON_ERROR_STOP=1 -f ARQUIVO`. O SQL inclui `ANALYZE` e retorna os IDs das empresas; não presuma IDs iniciando em 1. A carga recusa lotes existentes sem apagar dados. Não execute duas cargas simultâneas: essa verificação não garante idempotência concorrente. Aumente o volume gradualmente conforme o espaço disponível.
 
-## Fontes técnicas
+## Próximas etapas
 
-- [Spring Boot e acesso SQL](https://docs.spring.io/spring-boot/3.5/reference/data/sql.html).
-- [Documentação PostgreSQL: índices multicoluna](https://www.postgresql.org/docs/17/indexes-multicolumn.html).
-- [Documentação PostgreSQL: isolamento de transações](https://www.postgresql.org/docs/17/transaction-iso.html).
+1. Implantar e validar a API sem cache, com usuários e migrações separados.
+2. Carregar dados representativos e revisar os planos SQL.
+3. Habilitar o cache e validar os dois cenários na mesma base.
+4. Configurar k6 no segundo computador, repetir os ensaios e coletar latências, vazão, erros e recursos.
 
-## Validação realizada neste incremento
-
-Em 15/10/2026, `mvn verify` concluiu com sucesso: **10 testes de integração, zero falhas e zero testes ignorados**, com PostgreSQL 17.11 descartável. Foram verificados isolamento das páginas e contagens, desempate de horários por ID, vínculos entre empresas, atualização de status, limites e entradas inválidas, páginas vazias, precisão dos itens, restrições DDL do usuário runtime e execução/rejeição de repetição do gerador. O pacote executável foi gerado e o Compose da aplicação passou por `config --quiet`.
-
-O build da imagem Docker, a aplicação das roles/migrações nas VMs e a implantação da API permanecem pendentes. Nenhuma VM foi acessada ou alterada neste incremento. O ensaio não é uma medição de desempenho.
-
-No incremento seguinte, o cache opcional e suas restrições foram implementados e validados: **22 testes de integração passaram**, incluindo os testes existentes. A referência sem cache continua disponível e desligamento do cache não cria conexão Redis. O procedimento e as limitações de consistência estão em [CACHE.md](CACHE.md). Conforme orientação do usuário, nenhuma VM foi alterada e a implantação continua pendente.
+Controle também a distribuição de empresas e páginas acessadas, pois ela determina a taxa de acertos do cache.

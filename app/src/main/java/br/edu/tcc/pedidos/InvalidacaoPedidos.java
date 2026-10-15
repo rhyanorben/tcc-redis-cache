@@ -6,11 +6,15 @@ import org.springframework.transaction.event.TransactionalEventListener;
 
 @Component
 public class InvalidacaoPedidos {
-    private final PaginaCache cache;
-    public InvalidacaoPedidos(PaginaCache cache) { this.cache = cache; }
+
+    private final PaginaCache paginaCache;
+
+    public InvalidacaoPedidos(PaginaCache paginaCache) {
+        this.paginaCache = paginaCache;
+    }
 
     @TransactionalEventListener(phase = TransactionPhase.AFTER_COMMIT)
-    public void depoisDoCommit(PedidosAlterados event) {
-        cache.invalidar(event.tenantId());
+    public void depoisDoCommit(PedidosAlterados pedidosAlterados) {
+        paginaCache.invalidar(pedidosAlterados.tenantId());
     }
 }

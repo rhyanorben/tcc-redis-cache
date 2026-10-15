@@ -1,8 +1,8 @@
-# Adiciona a credencial da aplicação; mantém a credencial administrativa.
 services:
   redis:
     secrets:
       - redis_app_password
+
 secrets:
   redis_app_password:
     file: ./secrets/redis_app_password.txt

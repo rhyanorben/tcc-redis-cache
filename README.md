@@ -1,58 +1,43 @@
-# Ambiente experimental — PostgreSQL e Redis
+# TCC — PostgreSQL e Redis
 
-Repositório do ambiente experimental do TCC de Engenharia de Computação. O objetivo é comparar o desempenho da mesma aplicação SaaS em arquitetura Single Instance Multi-Tenant (SIMT), na qual uma única instância atende múltiplos tenants, em duas configurações:
+Experimento de Engenharia de Computação que compara a mesma aplicação com PostgreSQL e com cache-aside Redis. Uma instância atende várias empresas; a operação avaliada é a **listagem paginada de pedidos de uma empresa**.
 
-1. PostgreSQL como único serviço de armazenamento de dados.
-2. PostgreSQL com Redis como camada de cache.
+## Estado atual
 
-Este é o repositório principal de desenvolvimento. A aplicação está implementada e testada localmente, com cache-aside opcional e desligado por padrão. A operação avaliada é a listagem paginada de pedidos de uma empresa. Entidades: empresa, cliente, pedido e item_pedido.
+- API implementada com empresa, cliente, pedido e item_pedido.
+- Cache opcional, desligado por padrão; 22 testes de integração validados localmente.
+- PostgreSQL e Redis implantados anteriormente nas VMs de dados.
+- API, migrações, usuários da aplicação e ACL Redis pendentes de implantação.
+- Geração de carga com k6 e campanha experimental pendentes.
 
-| Diretório | Finalidade |
-| --- | --- |
-| `app/` | Aplicação Java/Spring Boot, migrações Flyway e testes de integração. |
-| `database/` | Orientações do banco e referência à localização das migrações. |
-| `docs/` | Modelo, contrato da API, decisões e plano de implementação. |
-| `scripts/` | Gerador de dados experimentais reproduzíveis. |
-| `infra/` | Infraestrutura e instruções de execução. |
-| `infra/app/` | Docker Compose e instruções de implantação da aplicação. |
-| `infra/postgres/` | PostgreSQL e provisionamento de usuários. |
-| `infra/redis/` | Redis, autenticação e configuração do cache. |
-| `infra/network/` | Restrição de origem das conexões aos bancos. |
-| `infra/scripts/` | Espaço reservado para futuros scripts de operação. |
-| `load/` | Espaço reservado para cenários de carga com k6. |
-| `monitoring/` | Espaço reservado para monitoramento e coleta de métricas. |
-| `results/` | Resultados experimentais, ignorados pelo Git, exceto `.gitkeep`. |
-
-## Estado do ambiente
-
-| VM | IP | Estado registrado em 15/10/2026 |
+| VM | IP | Função |
 | --- | --- | --- |
-| tcc-app | 10.10.10.10 | Clientes PostgreSQL/Redis instalados; API ainda não implantada. |
-| tcc-postgres | 10.10.10.20 | PostgreSQL implantado e comunicação autenticada validada. |
-| tcc-redis | 10.10.10.30 | Redis implantado; usuário restrito da API ainda não aplicado. |
+| tcc-app | 10.10.10.10 | API; possui apenas os clientes PostgreSQL/Redis instalados |
+| tcc-postgres | 10.10.10.20 | PostgreSQL |
+| tcc-redis | 10.10.10.30 | Redis |
 
-A sincronização deste repositório não modifica as VMs. Implantação, migrações e reinícios seguem o procedimento documentado e exigem confirmação.
+O estado das VMs vem do [registro de 15/10/2026](infra/DEPLOYMENT.md). Alterar arquivos locais não implanta serviços; qualquer alteração nas VMs depende de confirmação.
 
-## Desenvolvimento no IntelliJ
+## Desenvolvimento
 
-Abra a pasta deste repositório e importe `app/pom.xml` como projeto Maven, ou abra diretamente esse arquivo. Configure o SDK Java 21. Abrir o projeto não inicia a aplicação nem altera os bancos das VMs.
-
-Na raiz do repositório, com Java 21, Maven, Python 3 e Docker acessível:
+Abra `app/pom.xml` no IntelliJ como projeto Maven e selecione Java 21. Para compilar e testar, na raiz do repositório, tenha Java 21, Maven 3.6.3+, Python 3 e Docker acessível:
 
 ```sh
 mvn -f app/pom.xml verify
 ```
 
-Os testes usam um PostgreSQL descartável local, independente das VMs. Arquivos `.env`, pastas `secrets/`, resultados de build e configurações locais de IDE não devem ser versionados. Os exemplos `.env.example` podem ser versionados.
+Os testes usam PostgreSQL e Redis descartáveis locais, sem acessar as VMs. Não versione `.env`, `secrets/`, resultados de build ou configurações locais da IDE.
 
-## Documentação
+## Onde encontrar
 
-- [Modelo, contrato e próximos passos](docs/IMPLEMENTACAO.md).
-- [Cache-aside: configuração, consistência e testes](docs/CACHE.md).
-- [Aplicação, testes e exemplos HTTP](app/README.md).
-- [Infraestrutura PostgreSQL e Redis](infra/README.md).
-- [Registro de implantação dos bancos](infra/DEPLOYMENT.md).
-- [Implantação preparada da API](infra/app/README.md).
-- [Versões do ambiente](VERSIONS.md).
+| Conteúdo | Local |
+| --- | --- |
+| Modelo, API e geração de dados | [docs/IMPLEMENTACAO.md](docs/IMPLEMENTACAO.md) |
+| Cache: configuração e consistência | [docs/CACHE.md](docs/CACHE.md) |
+| Aplicação e exemplos HTTP | [app/README.md](app/README.md) |
+| Migrações | [database/README.md](database/README.md) |
+| PostgreSQL, Redis e rede | [infra/README.md](infra/README.md) |
+| Implantação da API | [infra/app/README.md](infra/app/README.md) |
+| Versões | [VERSIONS.md](VERSIONS.md) |
 
-O código, infraestrutura e documentação produzidos anteriormente no espelho do projeto ChatGPT foram incorporados aqui. PDFs e referências sincronizadas em `sources/` permaneceram no espelho de origem; não fazem parte desta implementação.
+`scripts/` contém o gerador de dados. `load/` e `monitoring/` estão reservados para as próximas etapas; `results/` guarda resultados locais ignorados pelo Git.

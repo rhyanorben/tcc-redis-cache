@@ -1,11 +1,10 @@
 # Banco de dados
 
-As migrações têm uma única fonte em [`app/src/main/resources/db/migration/`](../app/src/main/resources/db/migration/), para serem empacotadas com a aplicação e executadas pelo Flyway. Não duplique ou altere migrações já aplicadas; crie uma próxima versão.
+As [migrações Flyway](../app/src/main/resources/db/migration/) são empacotadas com a aplicação. Para evoluir o schema, crie uma nova versão; não duplique nem altere migrações já aplicadas.
 
-- [Migração inicial: empresa, cliente, pedido e item_pedido](../app/src/main/resources/db/migration/V1__modelo_multiempresa.sql).
-- [Provisionamento inicial dos usuários](../infra/postgres/provision-app.sql).
-- [Modelo e estratégia de paginação](../docs/IMPLEMENTACAO.md).
-- [Gerador de dados experimentais](../scripts/gerar_base.py).
-- [Procedimento de migração e implantação](../infra/app/README.md).
+- [Modelo inicial](../app/src/main/resources/db/migration/V1__modelo_multiempresa.sql): empresa, cliente, pedido e item_pedido.
+- [Provisionamento](../infra/postgres/provision-app.sql): migrador proprietário do schema e usuário da API sem DDL.
+- [Modelo e geração de dados](../docs/IMPLEMENTACAO.md).
+- [Procedimento de implantação](../infra/app/README.md).
 
-O provisionamento, as migrações e a carga de dados ainda não foram aplicados às VMs. A geração do arquivo SQL não altera banco algum.
+Usuários da aplicação, migrações e carga de dados ainda não foram aplicados às VMs.
