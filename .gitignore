@@ -32,3 +32,11 @@ temp/
 # Resultados experimentais: preservar apenas o marcador do diretório
 /results/*
 !/results/.gitkeep
+
+**/.env
+
+**/secrets/
+
+**/__pycache__/
+
+**/*.pyc

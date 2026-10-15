@@ -1,0 +1,39 @@
+name: tcc-app
+services:
+  app:
+    image: tcc-pedidos:0.1.0
+    build: ../../app
+    restart: unless-stopped
+    environment:
+      DB_URL: ${DB_URL:?Defina DB_URL}
+      DB_USER: tcc_app
+      DB_POOL_SIZE: ${DB_POOL_SIZE:-10}
+      FLYWAY_ENABLED: "false"
+    ports:
+      - "${APP_BIND_IP:?Defina APP_BIND_IP}:8080:8080"
+    secrets:
+      - source: app_password
+        target: DB_PASSWORD
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+  migrate:
+    image: tcc-pedidos:0.1.0
+    build: ../../app
+    profiles: [setup]
+    restart: "no"
+    environment:
+      DB_URL: ${DB_URL:?Defina DB_URL}
+      DB_USER: tcc_migrator
+      FLYWAY_ENABLED: "true"
+      SPRING_MAIN_WEB_APPLICATION_TYPE: none
+    secrets:
+      - source: migration_password
+        target: DB_PASSWORD
+secrets:
+  app_password:
+    file: ./secrets/app_password.txt
+  migration_password:
+    file: ./secrets/migration_password.txt

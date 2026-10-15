@@ -1,0 +1,35 @@
+spring:
+  application:
+    name: tcc-pedidos
+  config:
+    import: optional:configtree:/run/secrets/
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://10.10.10.20:5432/tcc?currentSchema=tcc}
+    username: ${DB_USER:tcc_app}
+    password: ${DB_PASSWORD}
+    hikari:
+      maximum-pool-size: ${DB_POOL_SIZE:10}
+      connection-timeout: 5000
+      data-source-properties:
+        options: -c statement_timeout=10000
+  flyway:
+    enabled: ${FLYWAY_ENABLED:false}
+    schemas: tcc
+    default-schema: tcc
+    clean-disabled: true
+    baseline-on-migrate: false
+  jackson:
+    time-zone: UTC
+server:
+  port: 8080
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+  endpoint:
+    health:
+      show-details: never
