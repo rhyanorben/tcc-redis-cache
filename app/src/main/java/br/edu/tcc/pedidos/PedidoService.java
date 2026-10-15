@@ -10,7 +10,11 @@ import static br.edu.tcc.pedidos.Contratos.*;
 @Service
 public class PedidoService {
     private final PedidoRepository repository;
-    public PedidoService(PedidoRepository repository) { this.repository = repository; }
+    private final org.springframework.context.ApplicationEventPublisher events;
+    public PedidoService(PedidoRepository repository, org.springframework.context.ApplicationEventPublisher events) {
+        this.repository = repository;
+        this.events = events;
+    }
 
     private void exigirEmpresa(long tenant) {
         if (!repository.empresaExiste(tenant)) throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Empresa não encontrada");
@@ -27,7 +31,9 @@ public class PedidoService {
         exigirEmpresa(tenant);
         if (!repository.clienteExiste(tenant, request.clienteId()))
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Cliente não encontrado nesta empresa");
-        return repository.buscar(tenant, repository.criarPedido(tenant, request));
+        var pedido = repository.buscar(tenant, repository.criarPedido(tenant, request));
+        events.publishEvent(new PedidosAlterados(tenant));
+        return pedido;
     }
     // Conteúdo e contagem observam o mesmo snapshot, inclusive sob escritas concorrentes.
     @Transactional(readOnly = true, isolation = Isolation.REPEATABLE_READ)
@@ -39,6 +45,8 @@ public class PedidoService {
     public PedidoResumo alterarStatus(long tenant, long pedido, AlterarStatus request) {
         if (repository.alterarStatus(tenant, pedido, request.status()) == 0)
             throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Pedido não encontrado nesta empresa");
-        return repository.buscar(tenant, pedido);
+        var atualizado = repository.buscar(tenant, pedido);
+        events.publishEvent(new PedidosAlterados(tenant));
+        return atualizado;
     }
 }

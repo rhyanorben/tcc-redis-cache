@@ -5,7 +5,7 @@ Repositório do ambiente experimental do TCC de Engenharia de Computação. O ob
 1. PostgreSQL como único serviço de armazenamento de dados.
 2. PostgreSQL com Redis como camada de cache.
 
-Este é o repositório principal de desenvolvimento. A aplicação inicial sem cache está implementada e testada localmente. A operação avaliada é a listagem paginada de pedidos de uma empresa. Entidades: empresa, cliente, pedido e item_pedido.
+Este é o repositório principal de desenvolvimento. A aplicação está implementada e testada localmente, com cache-aside opcional e desligado por padrão. A operação avaliada é a listagem paginada de pedidos de uma empresa. Entidades: empresa, cliente, pedido e item_pedido.
 
 | Diretório | Finalidade |
 | --- | --- |
@@ -29,7 +29,7 @@ Este é o repositório principal de desenvolvimento. A aplicação inicial sem c
 | --- | --- | --- |
 | tcc-app | 10.10.10.10 | Clientes PostgreSQL/Redis instalados; API ainda não implantada. |
 | tcc-postgres | 10.10.10.20 | PostgreSQL implantado e comunicação autenticada validada. |
-| tcc-redis | 10.10.10.30 | Redis implantado; aplicação ainda sem cache. |
+| tcc-redis | 10.10.10.30 | Redis implantado; usuário restrito da API ainda não aplicado. |
 
 A sincronização deste repositório não modifica as VMs. Implantação, migrações e reinícios seguem o procedimento documentado e exigem confirmação.
 
@@ -48,6 +48,7 @@ Os testes usam um PostgreSQL descartável local, independente das VMs. Arquivos 
 ## Documentação
 
 - [Modelo, contrato e próximos passos](docs/IMPLEMENTACAO.md).
+- [Cache-aside: configuração, consistência e testes](docs/CACHE.md).
 - [Aplicação, testes e exemplos HTTP](app/README.md).
 - [Infraestrutura PostgreSQL e Redis](infra/README.md).
 - [Registro de implantação dos bancos](infra/DEPLOYMENT.md).

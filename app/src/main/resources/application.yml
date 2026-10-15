@@ -1,4 +1,9 @@
 spring:
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.autoconfigure.data.redis.RedisAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisReactiveAutoConfiguration
+      - org.springframework.boot.autoconfigure.data.redis.RedisRepositoriesAutoConfiguration
   application:
     name: tcc-pedidos
   config:
@@ -26,6 +31,9 @@ server:
     include-message: never
     include-stacktrace: never
 management:
+  health:
+    redis:
+      enabled: false
   endpoints:
     web:
       exposure:
@@ -33,3 +41,14 @@ management:
   endpoint:
     health:
       show-details: never
+
+app:
+  cache:
+    enabled: ${CACHE_ENABLED:false}
+    namespace: ${CACHE_NAMESPACE:tcc:v1}
+    ttl: ${CACHE_TTL:60s}
+    timeout: ${CACHE_TIMEOUT:200ms}
+    host: ${REDIS_HOST:10.10.10.30}
+    port: ${REDIS_PORT:6379}
+    username: ${REDIS_USER:app}
+    password: ${REDIS_PASSWORD:}

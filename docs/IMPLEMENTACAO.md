@@ -4,7 +4,7 @@
 
 Entidades: empresa, cliente, pedido e item_pedido. A operação principal é **listar os pedidos de uma empresa com paginação**. A consulta de detalhes não é a operação de referência.
 
-A primeira implementação usa Java 21, Spring Boot 3.5.16, JDBC, PostgreSQL e Flyway. SQL explícito torna visíveis a consulta paginada e a contagem que serão medidas. Os records Java representam os contratos e resultados; o modelo relacional é definido pelas migrações. Redis permanece sem uso pela aplicação nesta etapa.
+A primeira implementação usa Java 21, Spring Boot 3.5.16, JDBC, PostgreSQL e Flyway. SQL explícito torna visíveis a consulta paginada e a contagem que serão medidas. Os records Java representam os contratos e resultados; o modelo relacional é definido pelas migrações. A referência sem cache continua sendo o padrão. O cache-aside opcional já está implementado no código, conforme [CACHE.md](CACHE.md), mas ainda não foi implantado.
 
 ## Modelo
 
@@ -78,7 +78,7 @@ Status: `ABERTO`, `CONFIRMADO`, `CANCELADO`. Não há exclusão, frontend ou int
 
 1. **Concluído localmente:** schema, migração inicial, API sem cache, isolamento por contexto, paginação, configuração Docker e testes de integração PostgreSQL.
 2. **Preparado para execução autorizada nas VMs:** criar roles, aplicar migrações, implantar API e gerar dados experimentais. Esses passos modificam o ambiente e não foram executados neste incremento.
-3. **Próxima implementação:** cache-aside da resposta paginada inteira. A chave deverá incluir empresa, página, tamanho e versão do contrato. Alterar/criar pedido invalida todas as páginas e suas contagens daquela empresa, não apenas uma chave por pedido. Definir TTL, estratégia de invalidação após commit e testes de corridas antes de ativar Redis.
+3. **Implementado localmente:** cache-aside da resposta paginada inteira, namespace/empresa/página/tamanho, TTL, invalidação por versão após commit, fallback e testes de corridas. Permanece desligado por padrão; ver [CACHE.md](CACHE.md).
 4. **Referência experimental:** revisar planos com dados representativos, controlar estatísticas do banco e medir modo sem cache. Depois comparar o mesmo endpoint com cache frio/aquecido e mesmos parâmetros.
 5. **Carga externa:** configurar segundo computador/k6, executar repetições e registrar p50/p95/p99, throughput, erros e recursos. Variar também a distribuição de empresas e páginas acessadas, pois ela afeta a taxa de acertos do cache.
 
@@ -106,3 +106,5 @@ Aplicação do SQL deve ocorrer separadamente e com confirmação, como `tcc_mig
 Em 15/10/2026, `mvn verify` concluiu com sucesso: **10 testes de integração, zero falhas e zero testes ignorados**, com PostgreSQL 17.11 descartável. Foram verificados isolamento das páginas e contagens, desempate de horários por ID, vínculos entre empresas, atualização de status, limites e entradas inválidas, páginas vazias, precisão dos itens, restrições DDL do usuário runtime e execução/rejeição de repetição do gerador. O pacote executável foi gerado e o Compose da aplicação passou por `config --quiet`.
 
 O build da imagem Docker, a aplicação das roles/migrações nas VMs e a implantação da API permanecem pendentes. Nenhuma VM foi acessada ou alterada neste incremento. O ensaio não é uma medição de desempenho.
+
+No incremento seguinte, o cache opcional e suas restrições foram implementados e validados: **22 testes de integração passaram**, incluindo os testes existentes. A referência sem cache continua disponível e desligamento do cache não cria conexão Redis. O procedimento e as limitações de consistência estão em [CACHE.md](CACHE.md). Conforme orientação do usuário, nenhuma VM foi alterada e a implantação continua pendente.

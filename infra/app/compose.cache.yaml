@@ -1,0 +1,17 @@
+# Sobrepor ao compose.yaml somente para o cenário com cache.
+services:
+  app:
+    environment:
+      CACHE_ENABLED: "true"
+      CACHE_NAMESPACE: ${CACHE_NAMESPACE:-tcc:v1}
+      CACHE_TTL: ${CACHE_TTL:-60s}
+      CACHE_TIMEOUT: ${CACHE_TIMEOUT:-200ms}
+      REDIS_HOST: ${REDIS_HOST:-10.10.10.30}
+      REDIS_PORT: ${REDIS_PORT:-6379}
+      REDIS_USER: app
+    secrets:
+      - source: redis_app_password
+        target: REDIS_PASSWORD
+secrets:
+  redis_app_password:
+    file: ./secrets/redis_app_password.txt

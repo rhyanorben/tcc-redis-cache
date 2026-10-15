@@ -12,7 +12,11 @@ import static br.edu.tcc.pedidos.Contratos.*;
 @Validated
 public class PedidoController {
     private final PedidoService service;
-    public PedidoController(PedidoService service) { this.service = service; }
+    private final ConsultaPedidosService consultas;
+    public PedidoController(PedidoService service, ConsultaPedidosService consultas) {
+        this.service = service;
+        this.consultas = consultas;
+    }
 
     @PostMapping("/empresas") @ResponseStatus(HttpStatus.CREATED)
     public Empresa criarEmpresa(@Valid @RequestBody NovaEmpresa request) { return service.criarEmpresa(request); }
@@ -31,7 +35,7 @@ public class PedidoController {
     public PaginaPedidos listar(@RequestHeader("X-Tenant-Id") @Positive long tenant,
                                   @RequestParam(defaultValue = "0") @Min(0) @Max(1_000_000) int page,
                                   @RequestParam(defaultValue = "20") @Min(1) @Max(100) int size) {
-        return service.listar(tenant, page, size);
+        return consultas.listar(tenant, page, size);
     }
     @PatchMapping("/pedidos/{id}/status")
     public PedidoResumo alterarStatus(@RequestHeader("X-Tenant-Id") @Positive long tenant,

@@ -25,3 +25,7 @@ redis@sha256:4fa24486b8bcca8eec45ee0eb166edc674795e53a2b53d1a9ef263eecebaac85
 O Dockerfile da aplicação usa `maven:3.9.9-eclipse-temurin-21` no build e `eclipse-temurin:21-jre-jammy` na execução. Essas bases ainda usam tags e devem ter seus digests registrados antes dos ensaios. A imagem Docker da aplicação ainda não foi construída ou implantada.
 
 Para a campanha experimental, registrar também versão exata do JDK/JRE em execução, recursos de cada VM, commit Git, digest da imagem final da aplicação, volume de dados, configuração de paginação, pool de conexões e parâmetros de cache.
+
+## Integração de cache no código
+
+Cache-aside opcional via Spring Data Redis/Lettuce, com versões gerenciadas pelo Spring Boot 3.5.16. Mesma imagem Redis 7.4.11 fixada acima nos testes. O cenário sem cache continua padrão. A configuração e ACL do cenário com cache estão preparadas, sem alteração das VMs; parâmetros e limites em `docs/CACHE.md`.

@@ -1,6 +1,6 @@
 # Implantação da aplicação — preparada, ainda não aplicada
 
-Apenas na VM `tcc-app` (10.10.10.10). PostgreSQL continua na VM 10.10.10.20 e Redis na 10.10.10.30. A aplicação usa PostgreSQL, sem cache nesta etapa. Os comandos abaixo ficam para execução após confirmação, pois criam roles, tabelas e um novo serviço.
+Apenas na VM `tcc-app` (10.10.10.10). PostgreSQL continua na VM 10.10.10.20 e Redis na 10.10.10.30. O Compose base usa PostgreSQL, sem cache. A sobreposição `compose.cache.yaml` prepara o segundo cenário. Os comandos abaixo ficam para execução após confirmação, pois criam roles, tabelas e um novo serviço.
 
 ## 1. Provisionar usuários PostgreSQL
 
@@ -51,3 +51,8 @@ curl --fail http://10.10.10.10:8080/actuator/health
 A execução `migrate` aplica Flyway e termina sem servidor HTTP. A API não recebe o secret do migrador e não executa DDL. Ela publica 8080 somente em 10.10.10.10. Não há frontend, Redis, TLS ou autenticação de usuários. Use apenas na rede de laboratório confiável; o cabeçalho de empresa não é autenticação. Atualizações de firewall, instalação e reinícios continuam sujeitos a confirmação.
 
 As imagens base do Dockerfile usam tags; o build Docker ainda não foi validado. Antes dos ensaios, valide o build na VM, registre os digests das bases e da imagem final e mantenha o mesmo artefato nos cenários sem/com cache. O pool tem dez conexões por padrão, configurável em `.env`; registre essa configuração na metodologia.
+
+
+## Cenário posterior com cache
+
+O cenário base e a migração definem `CACHE_ENABLED=false` e não exigem credencial Redis. Depois de validar a API sem cache, a integração opcional usa `compose.cache.yaml` e o usuário Redis restrito `app`. Consulte [o procedimento e as limitações](../../docs/CACHE.md). A configuração foi preparada, mas nenhum usuário, secret ou serviço das VMs foi alterado neste incremento.

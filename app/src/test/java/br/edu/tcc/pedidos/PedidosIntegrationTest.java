@@ -28,6 +28,7 @@ class PedidosIntegrationTest {
 
     @DynamicPropertySource
     static void properties(DynamicPropertyRegistry registry) {
+        registry.add("app.cache.enabled", () -> false);
         registry.add("spring.datasource.url", () -> POSTGRES.getJdbcUrl() + "&currentSchema=tcc");
         registry.add("spring.datasource.username", () -> "tcc_app");
         registry.add("spring.datasource.password", () -> "application-test");
@@ -179,6 +180,13 @@ class PedidosIntegrationTest {
         assertThat(repeated.getExitCode()).isNotZero();
         var unchanged = body(call("GET", "/api/pedidos", tenant, null, 200));
         assertThat(unchanged.get("totalElements").asLong()).isEqualTo(5);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    org.springframework.context.ApplicationContext context;
+
+    @Test void modoSemCacheNaoCriaConexaoRedis() {
+        assertThat(context.getBeansOfType(org.springframework.data.redis.connection.RedisConnectionFactory.class)).isEmpty();
     }
 
 }

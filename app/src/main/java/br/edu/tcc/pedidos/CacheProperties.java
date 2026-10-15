@@ -1,0 +1,26 @@
+package br.edu.tcc.pedidos;
+
+import jakarta.validation.constraints.*;
+import java.time.Duration;
+import org.springframework.boot.context.properties.ConfigurationProperties;
+import org.springframework.validation.annotation.Validated;
+
+@ConfigurationProperties("app.cache")
+@Validated
+public record CacheProperties(
+        boolean enabled,
+        @Pattern(regexp = "tcc:[A-Za-z0-9:_-]{1,60}") String namespace,
+        @NotNull Duration ttl,
+        @NotNull Duration timeout,
+        @NotBlank String host,
+        @Min(1) @Max(65535) int port,
+        @NotBlank String username,
+        String password) {
+    @AssertTrue(message = "TTL deve ficar entre 1ms e 1h e timeout entre 1ms e 5s")
+    public boolean isDurationsValid() {
+        return ttl != null && ttl.toMillis() >= 1 && ttl.compareTo(Duration.ofHours(1)) <= 0
+                && timeout != null && timeout.toMillis() >= 1 && timeout.compareTo(Duration.ofSeconds(5)) <= 0;
+    }
+    @AssertTrue(message = "REDIS_PASSWORD é obrigatória quando o cache está habilitado")
+    public boolean isPasswordConfigured() { return !enabled || (password != null && !password.isBlank()); }
+}
