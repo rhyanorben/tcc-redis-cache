@@ -1,4 +1,4 @@
-package br.edu.tcc.pedidos;
+package br.edu.tcc.pedidos.exception;
 
 import jakarta.validation.ConstraintViolationException;
 import org.springframework.dao.DataIntegrityViolationException;

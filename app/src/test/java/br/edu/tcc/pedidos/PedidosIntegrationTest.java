@@ -14,9 +14,15 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Path;
 import java.sql.Connection;
 import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
 import java.sql.SQLException;
+import java.sql.Statement;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
+import org.apache.commons.lang3.ObjectUtils;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -79,12 +85,12 @@ class PedidosIntegrationTest {
 
     @Test
     void paginacaoIsolaEmpresaEContagem() throws Exception {
-        var primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
-        var segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
         criarPedido(outraEmpresaId, clienteOutraEmpresaId);
 
-        var primeiraPagina = listarPedidos(empresaPrincipalId, "page=0&size=1");
-        var segundaPagina = listarPedidos(empresaPrincipalId, "page=1&size=1");
+        JsonNode primeiraPagina = listarPedidos(empresaPrincipalId, "page=0&size=1");
+        JsonNode segundaPagina = listarPedidos(empresaPrincipalId, "page=1&size=1");
 
         assertThat(primeiraPagina.get("totalElements").asLong()).isEqualTo(2);
         assertThat(primeiraPagina.get("totalPages").asLong()).isEqualTo(2);
@@ -99,16 +105,17 @@ class PedidosIntegrationTest {
 
     @Test
     void desempataPedidosComMesmoHorarioPorId() throws Exception {
-        var primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
-        var segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
         String atualizacao = "UPDATE tcc.pedido SET criado_em = '2026-01-01T00:00:00Z' WHERE tenant_id = ?";
 
-        try (var conexao = conectarComoAdministrador(); var comando = conexao.prepareStatement(atualizacao)) {
+        try (Connection conexao = conectarComoAdministrador();
+             PreparedStatement comando = conexao.prepareStatement(atualizacao)) {
             comando.setLong(1, empresaPrincipalId);
             comando.executeUpdate();
         }
 
-        var pagina = listarPedidos(empresaPrincipalId, "size=2");
+        JsonNode pagina = listarPedidos(empresaPrincipalId, "size=2");
 
         assertThat(pagina.get("content").get(0).get("id").asLong())
                 .isEqualTo(segundoPedido.get("id").asLong());
@@ -120,14 +127,15 @@ class PedidosIntegrationTest {
     void rejeitaClienteDeOutraEmpresaSemCriarPedidoOuItens() throws Exception {
         enviarRequisicao("POST", "/api/pedidos", empresaPrincipalId, corpoNovoPedido(clienteOutraEmpresaId), 404);
 
-        var pagina = listarPedidos(empresaPrincipalId, "");
+        JsonNode pagina = listarPedidos(empresaPrincipalId, "");
 
         assertThat(pagina.get("totalElements").asLong()).isZero();
 
         String consulta = "SELECT count(*) FROM tcc.item_pedido WHERE tenant_id = ?";
-        try (var conexao = conectarComoAdministrador(); var comando = conexao.prepareStatement(consulta)) {
+        try (Connection conexao = conectarComoAdministrador();
+             PreparedStatement comando = conexao.prepareStatement(consulta)) {
             comando.setLong(1, empresaPrincipalId);
-            try (var resultado = comando.executeQuery()) {
+            try (ResultSet resultado = comando.executeQuery()) {
                 assertThat(resultado.next()).isTrue();
                 assertThat(resultado.getLong(1)).isZero();
             }
@@ -140,11 +148,11 @@ class PedidosIntegrationTest {
         String caminhoStatus = "/api/pedidos/" + pedidoId + "/status";
 
         enviarRequisicao("PATCH", caminhoStatus, outraEmpresaId, "{\"status\":\"CANCELADO\"}", 404);
-        var pagina = listarPedidos(empresaPrincipalId, "");
+        JsonNode pagina = listarPedidos(empresaPrincipalId, "");
 
         assertThat(pagina.get("content").get(0).get("status").asText()).isEqualTo("ABERTO");
 
-        var pedidoAtualizado = lerCorpo(enviarRequisicao(
+        JsonNode pedidoAtualizado = lerCorpo(enviarRequisicao(
                 "PATCH", caminhoStatus, empresaPrincipalId, "{\"status\":\"CONFIRMADO\"}", 200));
 
         assertThat(pedidoAtualizado.get("status").asText()).isEqualTo("CONFIRMADO");
@@ -155,7 +163,7 @@ class PedidosIntegrationTest {
         enviarRequisicao("GET", "/api/pedidos", null, null, 400);
         enviarRequisicao("GET", "/api/pedidos", 0L, null, 400);
 
-        for (var parametros : List.of("page=-1", "size=0", "size=101", "page=1000001", "page=abc")) {
+        for (String parametros : List.of("page=-1", "size=0", "size=101", "page=1000001", "page=abc")) {
             enviarRequisicao("GET", "/api/pedidos?" + parametros, empresaPrincipalId, null, 400);
         }
 
@@ -164,7 +172,7 @@ class PedidosIntegrationTest {
 
     @Test
     void paginasVaziasTemMetadadosConsistentes() throws Exception {
-        var paginaVazia = listarPedidos(empresaPrincipalId, "");
+        JsonNode paginaVazia = listarPedidos(empresaPrincipalId, "");
 
         assertThat(paginaVazia.get("totalElements").asLong()).isZero();
         assertThat(paginaVazia.get("totalPages").asLong()).isZero();
@@ -172,7 +180,7 @@ class PedidosIntegrationTest {
         assertThat(paginaVazia.get("last").asBoolean()).isTrue();
 
         criarPedido(empresaPrincipalId, clientePrincipalId);
-        var paginaAlemDoTotal = listarPedidos(empresaPrincipalId, "page=10&size=1");
+        JsonNode paginaAlemDoTotal = listarPedidos(empresaPrincipalId, "page=10&size=1");
 
         assertThat(paginaAlemDoTotal.get("content").size()).isZero();
         assertThat(paginaAlemDoTotal.get("totalElements").asLong()).isEqualTo(1);
@@ -180,13 +188,13 @@ class PedidosIntegrationTest {
 
     @Test
     void validaItensEPrecisaoMonetaria() throws Exception {
-        var itensInvalidos = List.of(
+        List<String> itensInvalidos = List.of(
                 "[]",
                 "[null]",
                 "[{\"descricao\":\"A\",\"quantidade\":0,\"precoUnitario\":1}]",
                 "[{\"descricao\":\"A\",\"quantidade\":1,\"precoUnitario\":1.001}]");
 
-        for (var itens : itensInvalidos) {
+        for (String itens : itensInvalidos) {
             String corpo = "{\"clienteId\":" + clientePrincipalId + ",\"itens\":" + itens + "}";
             enviarRequisicao("POST", "/api/pedidos", empresaPrincipalId, corpo, 400);
         }
@@ -201,9 +209,9 @@ class PedidosIntegrationTest {
                 VALUES (?, ?, 'X', 1, 1)
                 """;
 
-        try (var conexao = conectarComoAdministrador()) {
+        try (Connection conexao = conectarComoAdministrador()) {
             assertThatThrownBy(() -> {
-                try (var comando = conexao.prepareStatement(insercaoPedido)) {
+                try (PreparedStatement comando = conexao.prepareStatement(insercaoPedido)) {
                     comando.setLong(1, empresaPrincipalId);
                     comando.setLong(2, clienteOutraEmpresaId);
                     comando.executeUpdate();
@@ -211,7 +219,7 @@ class PedidosIntegrationTest {
             }).isInstanceOf(SQLException.class).extracting("SQLState").isEqualTo("23503");
 
             assertThatThrownBy(() -> {
-                try (var comando = conexao.prepareStatement(insercaoItem)) {
+                try (PreparedStatement comando = conexao.prepareStatement(insercaoItem)) {
                     comando.setLong(1, outraEmpresaId);
                     comando.setLong(2, pedidoId);
                     comando.executeUpdate();
@@ -222,8 +230,8 @@ class PedidosIntegrationTest {
 
     @Test
     void runtimeNaoPodeAlterarSchemaOuHistoricoDeMigracoes() throws Exception {
-        try (var conexao = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "tcc_app", "application-test");
-             var comando = conexao.createStatement()) {
+        try (Connection conexao = DriverManager.getConnection(POSTGRES.getJdbcUrl(), "tcc_app", "application-test");
+             Statement comando = conexao.createStatement()) {
             assertThatThrownBy(() -> comando.execute("CREATE TABLE tcc.invasao(id bigint)"))
                     .isInstanceOf(SQLException.class).extracting("SQLState").isEqualTo("42501");
             assertThatThrownBy(() -> comando.executeQuery("SELECT * FROM tcc.flyway_schema_history"))
@@ -237,17 +245,17 @@ class PedidosIntegrationTest {
         gerarBaseDeTeste(arquivoBase);
         POSTGRES.copyFileToContainer(MountableFile.forHostPath(arquivoBase), "/tmp/seed.sql");
 
-        var primeiraImportacao = importarBaseDeTeste();
+        ExecResult primeiraImportacao = importarBaseDeTeste();
 
         assertThat(primeiraImportacao.getExitCode()).as(primeiraImportacao.getStderr()).isZero();
 
         long empresaGeradaId = buscarEmpresaGerada();
-        var pagina = listarPedidos(empresaGeradaId, "page=1&size=2");
+        JsonNode pagina = listarPedidos(empresaGeradaId, "page=1&size=2");
 
         assertThat(pagina.get("totalElements").asLong()).isEqualTo(5);
         assertThat(pagina.get("content").size()).isEqualTo(2);
 
-        var importacaoRepetida = importarBaseDeTeste();
+        ExecResult importacaoRepetida = importarBaseDeTeste();
 
         assertThat(importacaoRepetida.getExitCode()).isNotZero();
         assertThat(listarPedidos(empresaGeradaId, "").get("totalElements").asLong()).isEqualTo(5);
@@ -256,6 +264,91 @@ class PedidosIntegrationTest {
     @Test
     void modoSemCacheNaoCriaConexaoRedis() {
         assertThat(contexto.getBeansOfType(RedisConnectionFactory.class)).isEmpty();
+    }
+
+    @Test
+    void contratosHttpPreservamCamposPublicosSemExporEntidades() throws Exception {
+        JsonNode empresa = lerCorpo(enviarRequisicao(
+                "POST", "/api/empresas", null, "{\"nome\":\"Empresa contrato\"}", 201));
+        long empresaId = empresa.get("id").asLong();
+        JsonNode cliente = lerCorpo(enviarRequisicao(
+                "POST", "/api/clientes", empresaId, "{\"nome\":\"Cliente contrato\"}", 201));
+        JsonNode pedido = criarPedido(empresaId, cliente.get("id").asLong());
+        JsonNode pagina = listarPedidos(empresaId, "");
+
+        assertThat(nomesDosCampos(empresa)).containsExactlyInAnyOrder("id", "nome");
+        assertThat(nomesDosCampos(cliente)).containsExactlyInAnyOrder("id", "tenantId", "nome");
+        assertThat(nomesDosCampos(pedido)).containsExactlyInAnyOrder(
+                "id", "clienteId", "clienteNome", "status", "total", "criadoEm");
+        assertThat(nomesDosCampos(pagina)).containsExactlyInAnyOrder(
+                "content", "page", "size", "totalElements", "totalPages", "first", "last");
+        assertThat(pagina.get("content").get(0)).isEqualTo(pedido);
+    }
+
+    @Test
+    void pageableUsaValoresPadraoEOrdenacaoDecrescenteEstavel() throws Exception {
+        criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode pedidoMaisRecente = criarPedido(empresaPrincipalId, clientePrincipalId);
+
+        JsonNode pagina = listarPedidos(empresaPrincipalId, "");
+
+        assertThat(pagina.get("page").asInt()).isZero();
+        assertThat(pagina.get("size").asInt()).isEqualTo(20);
+        assertThat(pagina.get("totalElements").asLong()).isEqualTo(2);
+        assertThat(pagina.get("content").get(0).get("id")).isEqualTo(pedidoMaisRecente.get("id"));
+    }
+
+    @Test
+    void pageablePreservaOrdenacaoSolicitadaEntrePaginas() throws Exception {
+        JsonNode primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode terceiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+
+        JsonNode primeiraPagina = listarPedidos(empresaPrincipalId, "page=0&size=2&sort=id,asc");
+        JsonNode segundaPagina = listarPedidos(empresaPrincipalId, "page=1&size=2&sort=id,asc");
+
+        assertThat(primeiraPagina.get("content").get(0).get("id")).isEqualTo(primeiroPedido.get("id"));
+        assertThat(primeiraPagina.get("content").get(1).get("id")).isEqualTo(segundoPedido.get("id"));
+        assertThat(segundaPagina.get("content").get(0).get("id")).isEqualTo(terceiroPedido.get("id"));
+        assertThat(segundaPagina.get("totalElements").asLong()).isEqualTo(3);
+        assertThat(segundaPagina.get("totalPages").asLong()).isEqualTo(2);
+        assertThat(segundaPagina.get("last").asBoolean()).isTrue();
+    }
+
+    @Test
+    void ordenacaoPorTotalIncluiIdParaDesempatarPedidos() throws Exception {
+        JsonNode primeiroPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+        JsonNode segundoPedido = criarPedido(empresaPrincipalId, clientePrincipalId);
+
+        JsonNode primeiraPagina = listarPedidos(empresaPrincipalId, "size=1&sort=total,asc");
+        JsonNode segundaPagina = listarPedidos(empresaPrincipalId, "page=1&size=1&sort=total,asc");
+
+        assertThat(primeiraPagina.get("content").get(0).get("id")).isEqualTo(segundoPedido.get("id"));
+        assertThat(segundaPagina.get("content").get(0).get("id")).isEqualTo(primeiroPedido.get("id"));
+    }
+
+    @Test
+    void rejeitaCamposEDirecoesDeOrdenacaoForaDoContrato() throws Exception {
+        for (String parametros : List.of(
+                "sort=clienteNome,asc",
+                "sort=tenantId,asc",
+                "sort=cliente.nome,asc",
+                "sort=criado_em,desc",
+                "sort=id,invalido")) {
+            enviarRequisicao("GET", "/api/pedidos?" + parametros, empresaPrincipalId, null, 400);
+        }
+    }
+
+    @Test
+    void tenantIdEObrigatorioMesmoQuandoCabecalhoAntigoEstaPresente() throws Exception {
+        HttpRequest requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + "/api/pedidos"))
+                .header("X-Tenant-Id", Long.toString(empresaPrincipalId))
+                .GET()
+                .build();
+
+        HttpResponse<String> resposta = clienteHttp.send(requisicao, HttpResponse.BodyHandlers.ofString());
+
+        assertThat(resposta.statusCode()).isEqualTo(400);
     }
 
     private long criarEmpresa(String nome) throws Exception {
@@ -285,18 +378,18 @@ class PedidosIntegrationTest {
 
     private HttpResponse<String> enviarRequisicao(
             String metodo, String caminho, Long empresaId, String corpo, int statusEsperado) throws Exception {
-        var conteudo = corpo == null
+        HttpRequest.BodyPublisher conteudo = ObjectUtils.isEmpty(corpo)
                 ? HttpRequest.BodyPublishers.noBody()
                 : HttpRequest.BodyPublishers.ofString(corpo);
-        var requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + caminho))
+        HttpRequest.Builder requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + caminho))
                 .header("Content-Type", "application/json")
                 .method(metodo, conteudo);
 
-        if (empresaId != null) {
-            requisicao.header("X-Tenant-Id", empresaId.toString());
+        if (ObjectUtils.isNotEmpty(empresaId)) {
+            requisicao.header("tenantId", empresaId.toString());
         }
 
-        var resposta = clienteHttp.send(requisicao.build(), HttpResponse.BodyHandlers.ofString());
+        HttpResponse<String> resposta = clienteHttp.send(requisicao.build(), HttpResponse.BodyHandlers.ofString());
         assertThat(resposta.statusCode()).as(resposta.body()).isEqualTo(statusEsperado);
         return resposta;
     }
@@ -305,12 +398,18 @@ class PedidosIntegrationTest {
         return json.readTree(resposta.body());
     }
 
+    private Set<String> nomesDosCampos(JsonNode objeto) {
+        Set<String> campos = new HashSet<String>();
+        objeto.fieldNames().forEachRemaining(campos::add);
+        return campos;
+    }
+
     private Connection conectarComoAdministrador() throws SQLException {
         return DriverManager.getConnection(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
     }
 
     private void gerarBaseDeTeste(Path arquivoBase) throws Exception {
-        var processo = new ProcessBuilder(
+        Process processo = new ProcessBuilder(
                 "python3", "../scripts/gerar_base.py",
                 "--empresas", "2",
                 "--clientes-por-empresa", "2",
@@ -331,9 +430,9 @@ class PedidosIntegrationTest {
 
     private long buscarEmpresaGerada() throws SQLException {
         String consulta = "SELECT id FROM tcc.empresa WHERE nome = 'TCC-teste-integracao Empresa 1'";
-        try (var conexao = conectarComoAdministrador();
-             var comando = conexao.createStatement();
-             var resultado = comando.executeQuery(consulta)) {
+        try (Connection conexao = conectarComoAdministrador();
+             Statement comando = conexao.createStatement();
+             ResultSet resultado = comando.executeQuery(consulta)) {
             assertThat(resultado.next()).isTrue();
             return resultado.getLong(1);
         }

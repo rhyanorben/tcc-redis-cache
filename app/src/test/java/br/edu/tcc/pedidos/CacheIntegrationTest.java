@@ -4,14 +4,17 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
 
-import br.edu.tcc.pedidos.Contratos.AlterarStatus;
-import br.edu.tcc.pedidos.Contratos.NovaEmpresa;
-import br.edu.tcc.pedidos.Contratos.NovoCliente;
-import br.edu.tcc.pedidos.Contratos.NovoItem;
-import br.edu.tcc.pedidos.Contratos.NovoPedido;
-import br.edu.tcc.pedidos.Contratos.PaginaPedidos;
-import br.edu.tcc.pedidos.Contratos.PedidoResumo;
-import br.edu.tcc.pedidos.Contratos.Status;
+import br.edu.tcc.pedidos.cache.RedisPaginaCache;
+import br.edu.tcc.pedidos.config.CacheProperties;
+import br.edu.tcc.pedidos.model.ItemPedido;
+import br.edu.tcc.pedidos.model.Pedido;
+import br.edu.tcc.pedidos.model.PedidoResumo;
+import br.edu.tcc.pedidos.model.StatusPedido;
+import br.edu.tcc.pedidos.service.ClienteService;
+import br.edu.tcc.pedidos.service.ConsultaPedidosService;
+import br.edu.tcc.pedidos.service.EmpresaService;
+import br.edu.tcc.pedidos.service.PedidoService;
+import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -20,13 +23,20 @@ import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.security.NoSuchAlgorithmException;
 import java.time.Duration;
+import java.util.HexFormat;
 import java.util.List;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import org.apache.commons.lang3.ObjectUtils;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -34,6 +44,10 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.data.domain.Page;
+import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
+import org.springframework.data.domain.Sort;
 import org.springframework.data.redis.connection.RedisStandaloneConfiguration;
 import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactory;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -77,6 +91,12 @@ class CacheIntegrationTest {
 
     private static LettuceConnectionFactory conexaoAdministrador;
     private static StringRedisTemplate redisAdministrador;
+
+    @Autowired
+    EmpresaService empresas;
+
+    @Autowired
+    ClienteService clientes;
 
     @Autowired
     PedidoService pedidos;
@@ -128,7 +148,8 @@ class CacheIntegrationTest {
 
     @BeforeAll
     static void conectarAdministradorRedis() {
-        var servidor = new RedisStandaloneConfiguration(REDIS.getHost(), REDIS.getMappedPort(6379));
+        RedisStandaloneConfiguration servidor = new RedisStandaloneConfiguration(
+                REDIS.getHost(), REDIS.getMappedPort(6379));
         servidor.setPassword(ADMIN_PASSWORD);
         conexaoAdministrador = new LettuceConnectionFactory(servidor);
         conexaoAdministrador.afterPropertiesSet();
@@ -138,58 +159,66 @@ class CacheIntegrationTest {
 
     @AfterAll
     static void fecharConexaoAdministradorRedis() {
-        if (conexaoAdministrador != null) {
+        if (ObjectUtils.isNotEmpty(conexaoAdministrador)) {
             conexaoAdministrador.destroy();
         }
     }
 
     @BeforeEach
     void criarEmpresaECliente() {
-        empresaId = pedidos.criarEmpresa(new NovaEmpresa("Cache A")).id();
-        clienteId = pedidos.criarCliente(empresaId, new NovoCliente("Cliente A")).id();
+        empresaId = empresas.criarEmpresa("Cache A").getId();
+        clienteId = clientes.criarCliente(empresaId, "Cliente A").getId();
     }
 
     @Test
     void hitPreservaContratoESemConsultarBanco() throws Exception {
         criarPedido();
-        var paginaOriginal = consultas.listar(empresaId, 0, 20);
+        Page<PedidoResumo> paginaOriginal = consultas.listar(empresaId, paginacao(0, 20));
 
-        var paginaEmCache = cache.buscarOuCarregar(empresaId, 0, 20, () -> {
+        Page<PedidoResumo> paginaEmCache = cache.buscarOuCarregar(empresaId, paginacao(0, 20), () -> {
             throw new AssertionError("Hit não deve ler PostgreSQL");
         });
-        var resposta = consultarApi("/api/pedidos?page=0&size=20", empresaId);
+        HttpResponse<String> resposta = consultarApi("/api/pedidos?page=0&size=20", empresaId);
 
         assertThat(paginaEmCache).isEqualTo(paginaOriginal);
         assertThat(resposta.statusCode()).isEqualTo(200);
-        assertThat(json.readValue(resposta.body(), PaginaPedidos.class)).isEqualTo(paginaOriginal);
+        JsonNode respostaJson = json.readTree(resposta.body());
+        assertThat(respostaJson.get("content")).isEqualTo(json.readTree(json.writeValueAsString(paginaOriginal.getContent())));
+        assertThat(respostaJson.get("totalElements").asLong()).isEqualTo(paginaOriginal.getTotalElements());
+        assertThat(respostaJson.get("page").asInt()).isEqualTo(paginaOriginal.getNumber());
+        assertThat(respostaJson.get("size").asInt()).isEqualTo(paginaOriginal.getSize());
     }
 
     @Test
     void chavesSeparamEmpresasPaginasETamanhos() {
-        var primeiroPedido = criarPedido();
-        var segundoPedido = criarPedido();
-        long outraEmpresaId = pedidos.criarEmpresa(new NovaEmpresa("Cache B")).id();
-        long outroClienteId = pedidos.criarCliente(outraEmpresaId, new NovoCliente("Cliente B")).id();
-        var pedidoOutraEmpresa = pedidos.criarPedido(outraEmpresaId, novoPedidoPara(outroClienteId));
+        Pedido primeiroPedido = criarPedido();
+        Pedido segundoPedido = criarPedido();
+        long outraEmpresaId = empresas.criarEmpresa("Cache B").getId();
+        long outroClienteId = clientes.criarCliente(outraEmpresaId, "Cliente B").getId();
+        Pedido pedidoOutraEmpresa = pedidos.criarPedido(outraEmpresaId, outroClienteId, itensPedido());
 
-        assertThat(consultas.listar(empresaId, 0, 1).content().getFirst().id()).isEqualTo(segundoPedido.id());
-        assertThat(consultas.listar(empresaId, 1, 1).content().getFirst().id()).isEqualTo(primeiroPedido.id());
-        assertThat(consultas.listar(empresaId, 0, 2).content()).hasSize(2);
-        assertThat(consultas.listar(outraEmpresaId, 0, 1).content().getFirst().id())
-                .isEqualTo(pedidoOutraEmpresa.id());
-        assertThat(consultas.listar(empresaId, 0, 1).content().getFirst().id()).isEqualTo(segundoPedido.id());
-        assertThat(consultas.listar(empresaId, 1, 1).content().getFirst().id()).isEqualTo(primeiroPedido.id());
+        assertThat(consultas.listar(empresaId, paginacao(0, 1)).getContent().getFirst().id())
+                .isEqualTo(segundoPedido.getId());
+        assertThat(consultas.listar(empresaId, paginacao(1, 1)).getContent().getFirst().id())
+                .isEqualTo(primeiroPedido.getId());
+        assertThat(consultas.listar(empresaId, paginacao(0, 2)).getContent()).hasSize(2);
+        assertThat(consultas.listar(outraEmpresaId, paginacao(0, 1)).getContent().getFirst().id())
+                .isEqualTo(pedidoOutraEmpresa.getId());
+        assertThat(consultas.listar(empresaId, paginacao(0, 1)).getContent().getFirst().id())
+                .isEqualTo(segundoPedido.getId());
+        assertThat(consultas.listar(empresaId, paginacao(1, 1)).getContent().getFirst().id())
+                .isEqualTo(primeiroPedido.getId());
     }
 
     @Test
     void criacaoEAtualizacaoInvalidamTodasAsPaginasSomenteDaEmpresa() {
-        var pedidoParaAtualizar = criarPedido();
+        Pedido pedidoParaAtualizar = criarPedido();
         criarPedido();
-        consultas.listar(empresaId, 0, 1);
-        consultas.listar(empresaId, 1, 1);
-        consultas.listar(empresaId, 0, 20);
-        long outraEmpresaId = pedidos.criarEmpresa(new NovaEmpresa("Outra")).id();
-        consultas.listar(outraEmpresaId, 0, 20);
+        consultas.listar(empresaId, paginacao(0, 1));
+        consultas.listar(empresaId, paginacao(1, 1));
+        consultas.listar(empresaId, paginacao(0, 20));
+        long outraEmpresaId = empresas.criarEmpresa("Outra").getId();
+        consultas.listar(outraEmpresaId, paginacao(0, 20));
         String geracaoOutraEmpresa = buscarGeracaoCache(outraEmpresaId);
         String geracaoAntesDaCriacao = buscarGeracaoCache(empresaId);
 
@@ -197,26 +226,26 @@ class CacheIntegrationTest {
 
         assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoAntesDaCriacao);
         assertThat(buscarGeracaoCache(outraEmpresaId)).isEqualTo(geracaoOutraEmpresa);
-        assertThat(consultas.listar(empresaId, 0, 1).totalElements()).isEqualTo(3);
-        assertThat(consultas.listar(empresaId, 1, 1).totalElements()).isEqualTo(3);
-        assertThat(consultas.listar(empresaId, 0, 20).content()).hasSize(3);
+        assertThat(consultas.listar(empresaId, paginacao(0, 1)).getTotalElements()).isEqualTo(3);
+        assertThat(consultas.listar(empresaId, paginacao(1, 1)).getTotalElements()).isEqualTo(3);
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getContent()).hasSize(3);
 
         String geracaoAntesDaAtualizacao = buscarGeracaoCache(empresaId);
-        pedidos.alterarStatus(empresaId, pedidoParaAtualizar.id(), new AlterarStatus(Status.CONFIRMADO));
+        pedidos.alterarStatus(empresaId, pedidoParaAtualizar.getId(), StatusPedido.CONFIRMADO);
 
         assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoAntesDaAtualizacao);
 
-        var pedidoAtualizado = consultas.listar(empresaId, 0, 20).content().stream()
-                .filter(pedido -> pedido.id() == pedidoParaAtualizar.id())
+        PedidoResumo pedidoAtualizado = consultas.listar(empresaId, paginacao(0, 20)).getContent().stream()
+                .filter(pedido -> pedido.id() == pedidoParaAtualizar.getId())
                 .findFirst()
                 .orElseThrow();
 
-        assertThat(pedidoAtualizado.status()).isEqualTo(Status.CONFIRMADO);
+        assertThat(pedidoAtualizado.status()).isEqualTo(StatusPedido.CONFIRMADO);
     }
 
     @Test
     void rollbackNaoInvalidaCache() {
-        consultas.listar(empresaId, 0, 20);
+        consultas.listar(empresaId, paginacao(0, 20));
         String geracaoAntesDoRollback = buscarGeracaoCache(empresaId);
 
         new TransactionTemplate(gerenciadorTransacoes).executeWithoutResult(transacao -> {
@@ -225,54 +254,56 @@ class CacheIntegrationTest {
         });
 
         assertThat(buscarGeracaoCache(empresaId)).isEqualTo(geracaoAntesDoRollback);
-        assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isZero();
-        assertThat(pedidos.listar(empresaId, 0, 20).totalElements()).isZero();
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isZero();
+        assertThat(pedidos.listar(empresaId, paginacao(0, 20)).getTotalElements()).isZero();
     }
 
     @Test
     void ttlExpiraPaginaSemRenovacaoEmHits() {
-        var configuracaoTtlCurto = new CacheProperties(
+        CacheProperties configuracaoTtlCurto = new CacheProperties(
                 true, "tcc:expiry", Duration.ofMillis(300), configuracaoCache.timeout(),
                 configuracaoCache.host(), configuracaoCache.port(),
                 configuracaoCache.username(), configuracaoCache.password());
-        var cacheTtlCurto = new RedisPaginaCache(redis, json, configuracaoTtlCurto, new SimpleMeterRegistry());
-        var carregamentos = new AtomicInteger();
-        Supplier<PaginaPedidos> carregarPagina = () -> {
+        RedisPaginaCache cacheTtlCurto = new RedisPaginaCache(redis, json, configuracaoTtlCurto, new SimpleMeterRegistry());
+        AtomicInteger carregamentos = new AtomicInteger();
+        Supplier<Page<PedidoResumo>> carregarPagina = () -> {
             carregamentos.incrementAndGet();
-            return pedidos.listar(empresaId, 0, 20);
+            return pedidos.listar(empresaId, paginacao(0, 20));
         };
 
-        cacheTtlCurto.buscarOuCarregar(empresaId, 0, 20, carregarPagina);
+        cacheTtlCurto.buscarOuCarregar(empresaId, paginacao(0, 20), carregarPagina);
         String prefixo = "tcc:expiry:tenant:{" + empresaId + "}:pedidos:";
         String geracao = redisAdministrador.opsForValue().get(prefixo + "generation");
-        String chavePagina = prefixo + geracao + ":page:0:size:20";
+        String chavePagina = prefixo + geracao + ":page:0:size:20:sort:"
+                + assinaturaOrdenacao(paginacao(0, 20));
 
         assertThat(redisAdministrador.getExpire(chavePagina, TimeUnit.MILLISECONDS)).isBetween(1L, 300L);
 
-        cacheTtlCurto.buscarOuCarregar(empresaId, 0, 20, carregarPagina);
+        cacheTtlCurto.buscarOuCarregar(empresaId, paginacao(0, 20), carregarPagina);
 
         assertThat(carregamentos).hasValue(1);
 
         await().atMost(Duration.ofSeconds(3))
                 .until(() -> !Boolean.TRUE.equals(redisAdministrador.hasKey(chavePagina)));
-        cacheTtlCurto.buscarOuCarregar(empresaId, 0, 20, carregarPagina);
+        cacheTtlCurto.buscarOuCarregar(empresaId, paginacao(0, 20), carregarPagina);
 
         assertThat(carregamentos).hasValue(2);
     }
 
     @Test
     void leituraConcorrenteNaoRepopulaVersaoInvalidada() throws Exception {
-        var paginaConsultada = new CountDownLatch(1);
-        var liberarPreenchimento = new CountDownLatch(1);
+        CountDownLatch paginaConsultada = new CountDownLatch(1);
+        CountDownLatch liberarPreenchimento = new CountDownLatch(1);
         double descartesAntesDaInvalidacao = contarMetrica("tcc.cache.discarded_writes");
 
-        try (var executor = Executors.newSingleThreadExecutor()) {
-            var leituraConcorrente = executor.submit(() -> cache.buscarOuCarregar(empresaId, 0, 20, () -> {
-                var paginaAntesDaCriacao = pedidos.listar(empresaId, 0, 20);
-                paginaConsultada.countDown();
-                aguardarPreenchimento(liberarPreenchimento);
-                return paginaAntesDaCriacao;
-            }));
+        try (ExecutorService executor = Executors.newSingleThreadExecutor()) {
+            Future<Page<PedidoResumo>> leituraConcorrente = executor.submit(() -> cache.buscarOuCarregar(
+                    empresaId, paginacao(0, 20), () -> {
+                        Page<PedidoResumo> paginaAntesDaCriacao = pedidos.listar(empresaId, paginacao(0, 20));
+                        paginaConsultada.countDown();
+                        aguardarPreenchimento(liberarPreenchimento);
+                        return paginaAntesDaCriacao;
+                    }));
 
             try {
                 assertThat(paginaConsultada.await(5, TimeUnit.SECONDS)).isTrue();
@@ -281,9 +312,9 @@ class CacheIntegrationTest {
                 criarPedido();
                 liberarPreenchimento.countDown();
 
-                assertThat(leituraConcorrente.get(5, TimeUnit.SECONDS).totalElements()).isZero();
+                assertThat(leituraConcorrente.get(5, TimeUnit.SECONDS).getTotalElements()).isZero();
                 assertThat(redisAdministrador.hasKey(chavePagina(empresaId, geracaoAnterior, 0, 20))).isFalse();
-                assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isEqualTo(1);
+                assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
                 assertThat(contarMetrica("tcc.cache.discarded_writes")).isGreaterThan(descartesAntesDaInvalidacao);
             } finally {
                 liberarPreenchimento.countDown();
@@ -294,17 +325,17 @@ class CacheIntegrationTest {
     @Test
     void perdaDaVersaoNaoRessuscitaPaginaAntiga() {
         criarPedido();
-        consultas.listar(empresaId, 0, 20);
+        consultas.listar(empresaId, paginacao(0, 20));
         String geracaoAnterior = buscarGeracaoCache(empresaId);
         String chavePaginaAnterior = chavePagina(empresaId, geracaoAnterior, 0, 20);
 
         assertThat(redisAdministrador.hasKey(chavePaginaAnterior)).isTrue();
 
         redisAdministrador.delete(chaveGeracao(empresaId));
-        var carregamentos = new AtomicInteger();
-        cache.buscarOuCarregar(empresaId, 0, 20, () -> {
+        AtomicInteger carregamentos = new AtomicInteger();
+        cache.buscarOuCarregar(empresaId, paginacao(0, 20), () -> {
             carregamentos.incrementAndGet();
-            return pedidos.listar(empresaId, 0, 20);
+            return pedidos.listar(empresaId, paginacao(0, 20));
         });
 
         assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoAnterior);
@@ -314,12 +345,12 @@ class CacheIntegrationTest {
     @Test
     void jsonCorrompidoERecarregado() throws Exception {
         criarPedido();
-        consultas.listar(empresaId, 0, 20);
+        consultas.listar(empresaId, paginacao(0, 20));
         String chave = chavePagina(empresaId, buscarGeracaoCache(empresaId), 0, 20);
         redisAdministrador.opsForValue().set(chave, "json-invalido");
         double errosAntesDaLeitura = contarMetrica("tcc.cache.errors");
 
-        assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isEqualTo(1);
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
         assertThat(json.readTree(redisAdministrador.opsForValue().get(chave)).get("totalElements").asLong())
                 .isEqualTo(1);
         assertThat(contarMetrica("tcc.cache.errors")).isGreaterThan(errosAntesDaLeitura);
@@ -327,29 +358,29 @@ class CacheIntegrationTest {
 
     @Test
     void falhaRedisNaoDesfazCommitEReparaInvalidacaoAoRecuperar() throws Exception {
-        consultas.listar(empresaId, 0, 20);
+        consultas.listar(empresaId, paginacao(0, 20));
         String geracaoAntesDaFalha = buscarGeracaoCache(empresaId);
         REDIS.getDockerClient().pauseContainerCmd(REDIS.getContainerId()).exec();
 
         try {
             criarPedido();
 
-            assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isEqualTo(1);
+            assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
             assertThat(consultarApi("/actuator/health", null).statusCode()).isEqualTo(200);
         } finally {
             REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
         }
 
         await().atMost(Duration.ofSeconds(10)).untilAsserted(() -> {
-            assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isEqualTo(1);
+            assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
             assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoAntesDaFalha);
         });
 
-        var paginaRecuperada = cache.buscarOuCarregar(empresaId, 0, 20, () -> {
+        Page<PedidoResumo> paginaRecuperada = cache.buscarOuCarregar(empresaId, paginacao(0, 20), () -> {
             throw new AssertionError("Deve ser hit após recuperação");
         });
 
-        assertThat(paginaRecuperada.totalElements()).isEqualTo(1);
+        assertThat(paginaRecuperada.getTotalElements()).isEqualTo(1);
     }
 
     @Test
@@ -358,24 +389,73 @@ class CacheIntegrationTest {
                 .rootCause().hasMessageContaining("NOPERM");
         assertThatThrownBy(() -> redis.keys("*"))
                 .rootCause().hasMessageContaining("NOPERM");
-        assertThat(consultas.listar(empresaId, 0, 20).totalElements()).isZero();
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isZero();
     }
 
     @Test
     void empresaInexistenteNaoTem404Armazenado() {
-        assertThatThrownBy(() -> consultas.listar(Long.MAX_VALUE, 0, 20))
+        assertThatThrownBy(() -> consultas.listar(Long.MAX_VALUE, paginacao(0, 20)))
                 .isInstanceOf(ResponseStatusException.class);
         assertThat(redisAdministrador.keys(
                 configuracaoCache.namespace() + ":tenant:{" + Long.MAX_VALUE + "}:pedidos:*:page:*"))
                 .isEmpty();
     }
 
-    private PedidoResumo criarPedido() {
-        return pedidos.criarPedido(empresaId, novoPedidoPara(clienteId));
+    @Test
+    void ordenacoesOpostasUsamPaginasDeCacheIndependentes() {
+        Pedido primeiroPedido = criarPedido();
+        Pedido segundoPedido = criarPedido();
+        Pageable crescente = PageRequest.of(0, 1, Sort.by(Sort.Direction.ASC, "id"));
+        Pageable decrescente = PageRequest.of(0, 1, Sort.by(Sort.Direction.DESC, "id"));
+
+        Page<PedidoResumo> paginaCrescente = consultas.listar(empresaId, crescente);
+        Page<PedidoResumo> paginaDecrescente = consultas.listar(empresaId, decrescente);
+        Page<PedidoResumo> crescenteEmCache = cache.buscarOuCarregar(empresaId, crescente, () -> {
+            throw new AssertionError("A ordenação crescente deve estar no cache");
+        });
+        Page<PedidoResumo> decrescenteEmCache = cache.buscarOuCarregar(empresaId, decrescente, () -> {
+            throw new AssertionError("A ordenação decrescente deve estar no cache");
+        });
+
+        assertThat(paginaCrescente.getContent().getFirst().id()).isEqualTo(primeiroPedido.getId());
+        assertThat(paginaDecrescente.getContent().getFirst().id()).isEqualTo(segundoPedido.getId());
+        assertThat(crescenteEmCache).isEqualTo(paginaCrescente);
+        assertThat(decrescenteEmCache).isEqualTo(paginaDecrescente);
+        assertThat(crescenteEmCache.getSort()).isEqualTo(crescente.getSort());
+        assertThat(decrescenteEmCache.getSort()).isEqualTo(decrescente.getSort());
     }
 
-    private NovoPedido novoPedidoPara(long clienteId) {
-        return new NovoPedido(clienteId, List.of(new NovoItem("Item", 2, new BigDecimal("12.35"))));
+    @Test
+    void paginaAlemDoTotalPreservaMetadadosNoCache() {
+        criarPedido();
+        criarPedido();
+        Pageable foraDoIntervalo = paginacao(5, 1);
+        Page<PedidoResumo> paginaOriginal = consultas.listar(empresaId, foraDoIntervalo);
+
+        Page<PedidoResumo> paginaEmCache = cache.buscarOuCarregar(empresaId, foraDoIntervalo, () -> {
+            throw new AssertionError("Uma página sem conteúdo também deve ser armazenada");
+        });
+
+        assertThat(paginaEmCache).isEqualTo(paginaOriginal);
+        assertThat(paginaEmCache.getContent()).isEmpty();
+        assertThat(paginaEmCache.getTotalElements()).isEqualTo(2);
+        assertThat(paginaEmCache.getTotalPages()).isEqualTo(2);
+        assertThat(paginaEmCache.getNumber()).isEqualTo(5);
+        assertThat(paginaEmCache.isFirst()).isFalse();
+        assertThat(paginaEmCache.isLast()).isTrue();
+    }
+
+    private Pedido criarPedido() {
+        return pedidos.criarPedido(empresaId, clienteId, itensPedido());
+    }
+
+    private List<ItemPedido> itensPedido() {
+        return List.of(new ItemPedido("Item", 2, new BigDecimal("12.35")));
+    }
+
+    private Pageable paginacao(int pagina, int tamanho) {
+        Sort ordenacao = Sort.by(Sort.Order.desc("criadoEm"), Sort.Order.desc("id"));
+        return PageRequest.of(pagina, tamanho, ordenacao);
     }
 
     private String chaveGeracao(long empresaId) {
@@ -388,7 +468,18 @@ class CacheIntegrationTest {
 
     private String chavePagina(long empresaId, String geracao, int pagina, int tamanho) {
         return configuracaoCache.namespace() + ":tenant:{" + empresaId + "}:pedidos:"
-                + geracao + ":page:" + pagina + ":size:" + tamanho;
+                + geracao + ":page:" + pagina + ":size:" + tamanho
+                + ":sort:" + assinaturaOrdenacao(paginacao(pagina, tamanho));
+    }
+
+    private String assinaturaOrdenacao(Pageable paginacao) {
+        try {
+            MessageDigest algoritmo = MessageDigest.getInstance("SHA-256");
+            byte[] assinatura = algoritmo.digest(paginacao.getSort().toString().getBytes(StandardCharsets.UTF_8));
+            return HexFormat.of().formatHex(assinatura);
+        } catch (NoSuchAlgorithmException exception) {
+            throw new IllegalStateException(exception);
+        }
     }
 
     private double contarMetrica(String nome) {
@@ -396,9 +487,9 @@ class CacheIntegrationTest {
     }
 
     private HttpResponse<String> consultarApi(String caminho, Long empresaId) throws Exception {
-        var requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + caminho)).GET();
-        if (empresaId != null) {
-            requisicao.header("X-Tenant-Id", empresaId.toString());
+        HttpRequest.Builder requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + caminho)).GET();
+        if (ObjectUtils.isNotEmpty(empresaId)) {
+            requisicao.header("tenantId", empresaId.toString());
         }
         return clienteHttp.send(requisicao.build(), HttpResponse.BodyHandlers.ofString());
     }

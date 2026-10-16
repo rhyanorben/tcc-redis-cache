@@ -1,4 +1,4 @@
-package br.edu.tcc.pedidos;
+package br.edu.tcc.pedidos.cache;
 
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;

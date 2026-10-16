@@ -5,7 +5,7 @@ Experimento de Engenharia de Computação que compara a mesma aplicação com Po
 ## Estado atual
 
 - API implementada com empresa, cliente, pedido e item_pedido.
-- Cache opcional, desligado por padrão; 22 testes de integração validados localmente.
+- Cache opcional, desligado por padrão; 39 testes automatizados validados localmente.
 - PostgreSQL e Redis implantados anteriormente nas VMs de dados.
 - API, migrações, usuários da aplicação e ACL Redis pendentes de implantação.
 - Geração de carga com k6 e campanha experimental pendentes.

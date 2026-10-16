@@ -1,6 +1,23 @@
-# Modelo e contrato da API
+# Estrutura, modelo e contrato da API
 
-Java 21, Spring Boot, JDBC e Flyway. SQL explícito permite avaliar a consulta paginada e sua contagem. A aplicação compartilha banco e schema entre empresas, com `tenant_id` nas tabelas de negócio.
+Java 21, Spring Boot, Spring Data JPA e Flyway. Repositórios `JpaRepository` usam JPQL para as consultas por empresa. A aplicação compartilha banco e schema entre empresas, com `tenant_id` nas tabelas de negócio.
+
+## Estrutura do código
+
+Os pacotes ficam em `app/src/main/java/br/edu/tcc/pedidos/`. Somente `PedidosApplication` permanece na raiz; cada classe, record e enum tem seu próprio arquivo.
+
+| Pacote | Responsabilidade |
+| --- | --- |
+| `controller` | Rotas de empresa, cliente e pedido; recebe e valida DTOs HTTP |
+| `dto.request` / `dto.response` | Contratos de entrada e saída da API |
+| `service` | Casos de uso, transações, validações de negócio e cálculo do total dos pedidos |
+| `model` | Entidades JPA, status e resumo dos pedidos, sem dependência da camada web |
+| `mapper` | Conversão explícita entre DTOs e modelos, usada somente pelos controllers |
+| `repository` | Interfaces `JpaRepository` por entidade e consultas JPQL, sem DTOs HTTP |
+| `cache` / `config` | Cache-aside, métricas e configuração Spring |
+| `event` / `exception` | Invalidação após commit e tratamento de erros |
+
+Os controllers recebem e retornam DTOs e fazem os mapeamentos. Os serviços recebem modelos ou valores simples, delimitam as transações e retornam entidades ou `Page<PedidoResumo>`. Os repositórios consultam e persistem entidades; o cálculo do total permanece no serviço. `ConsultaPedidosService` coordena a leitura com cache opcional, enquanto `PedidoService` mantém a consulta transacional ao PostgreSQL. Hibernate valida o schema criado pelo Flyway; `open-in-view` fica desligado.
 
 ## Modelo
 
@@ -25,23 +42,26 @@ erDiagram
 
 ```http
 GET /api/pedidos?page=0&size=20
-X-Tenant-Id: 1
+tenantId: 1
 ```
 
 A resposta contém `content` com resumos (`id`, `clienteId`, `clienteNome`, `status`, `total`, `criadoEm`), além de `page`, `size`, `totalElements`, `totalPages`, `first` e `last`.
 
 | Parâmetro | Regra |
 | --- | --- |
-| `X-Tenant-Id` | ID positivo da empresa |
+| `tenantId` | ID positivo da empresa |
 | `page` | Base zero; padrão 0; máximo 1.000.000 |
 | `size` | De 1 a 100; padrão 20 |
-| Ordenação | `criado_em DESC, id DESC` |
+| `sort` | Campos `id`, `criadoEm`, `status` ou `total`, com direção `asc`/`desc` |
+| Ordem padrão | `criadoEm DESC, id DESC` |
 
-A consulta usa `LIMIT/OFFSET`, une cliente e pedido por empresa e ID, e não carrega itens. A validação da empresa, a página e o `COUNT(*)` usam uma transação de leitura `REPEATABLE READ`; conteúdo e total compartilham o mesmo snapshot. Requisições para páginas diferentes podem observar mudanças concorrentes. O índice `(tenant_id, criado_em DESC, id DESC)` atende ao filtro e à ordem; OFFSET e contagem exata podem ficar mais caros com o crescimento da base.
+A entrada usa `Pageable`, com os limites acima. Para ordenar por mais de um campo, repita `sort`, por exemplo `?page=0&size=20&sort=status,asc&sort=criadoEm,desc`. O ID é acrescentado como desempate quando não foi informado; campos ou direções inválidos retornam 400.
+
+A consulta JPQL une pedido e cliente, filtra pela empresa e retorna resumos sem carregar itens. A validação da empresa, a página e sua contagem usam uma transação de leitura `REPEATABLE READ`; conteúdo e total compartilham o mesmo snapshot. Em páginas parciais, o Spring Data pode inferir o total e dispensar a consulta de contagem. Requisições para páginas diferentes podem observar mudanças concorrentes. O índice `(tenant_id, criado_em DESC, id DESC)` atende à ordem padrão; outras ordens e páginas com deslocamentos maiores podem aumentar o custo.
 
 Empresa inexistente retorna 404. Empresa sem pedidos ou página além do fim retorna conteúdo vazio, preservando o total real. Cabeçalho ausente/inválido e paginação inválida retornam 400.
 
-`X-Tenant-Id` seleciona a empresa no laboratório e pode ser alterado pelo cliente. Autenticação, autorização de usuários e RLS não estão implementados. Os testes verificam o isolamento conforme o contexto informado; use a API apenas na rede experimental confiável.
+`tenantId` seleciona a empresa no laboratório e pode ser alterado pelo cliente. Autenticação, autorização de usuários e RLS não estão implementados. Os testes verificam o isolamento conforme o contexto informado; use a API apenas na rede experimental confiável.
 
 ## Operações auxiliares
 

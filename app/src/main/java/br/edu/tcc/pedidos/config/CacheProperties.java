@@ -1,4 +1,4 @@
-package br.edu.tcc.pedidos;
+package br.edu.tcc.pedidos.config;
 
 import jakarta.validation.constraints.AssertTrue;
 import jakarta.validation.constraints.Max;
@@ -7,6 +7,7 @@ import jakarta.validation.constraints.NotBlank;
 import jakarta.validation.constraints.NotNull;
 import jakarta.validation.constraints.Pattern;
 import java.time.Duration;
+import org.apache.commons.lang3.ObjectUtils;
 import org.springframework.boot.context.properties.ConfigurationProperties;
 import org.springframework.validation.annotation.Validated;
 
@@ -30,11 +31,11 @@ public record CacheProperties(
 
     @AssertTrue(message = "REDIS_PASSWORD é obrigatória quando o cache está habilitado")
     public boolean isPasswordConfigured() {
-        return !enabled || (password != null && !password.isBlank());
+        return !enabled || ObjectUtils.isNotEmpty(password);
     }
 
     private boolean duracaoValida(Duration duracao, Duration limiteSuperior) {
-        return duracao != null
+        return ObjectUtils.isNotEmpty(duracao)
                 && duracao.toMillis() >= 1
                 && duracao.compareTo(limiteSuperior) <= 0;
     }

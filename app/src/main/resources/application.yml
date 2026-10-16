@@ -17,6 +17,15 @@ spring:
       connection-timeout: 5000
       data-source-properties:
         options: -c statement_timeout=10000
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: validate
+    properties:
+      hibernate:
+        default_schema: tcc
+        jdbc:
+          time_zone: UTC
   flyway:
     enabled: ${FLYWAY_ENABLED:false}
     schemas: tcc
@@ -47,7 +56,7 @@ management:
 app:
   cache:
     enabled: ${CACHE_ENABLED:false}
-    namespace: ${CACHE_NAMESPACE:tcc:v1}
+    namespace: ${CACHE_NAMESPACE:tcc:v2}
     ttl: ${CACHE_TTL:60s}
     timeout: ${CACHE_TIMEOUT:200ms}
     host: ${REDIS_HOST:10.10.10.30}

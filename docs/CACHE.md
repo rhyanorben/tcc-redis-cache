@@ -1,6 +1,6 @@
 # Cache das páginas de pedidos
 
-Cache-aside opcional da resposta paginada inteira, implementado com Spring Data Redis/Lettuce e JSON tipado. Está desligado por padrão e ainda não foi implantado nas VMs.
+Cache-aside opcional das páginas de pedidos, implementado com Spring Data Redis/Lettuce. O JSON interno guarda conteúdo e total; não depende de DTOs HTTP. A leitura reconstrói `Page<PedidoResumo>` com a paginação solicitada. Está desligado por padrão e ainda não foi implantado nas VMs.
 
 | Configuração | Leitura |
 | --- | --- |
@@ -12,11 +12,11 @@ O contrato HTTP é igual nos dois modos. Um acerto evita a transação PostgreSQ
 ## Chaves e invalidação
 
 ```text
-tcc:v1:tenant:{42}:pedidos:generation
-tcc:v1:tenant:{42}:pedidos:<UUID>:page:0:size:20
+tcc:v2:tenant:{42}:pedidos:generation
+tcc:v2:tenant:{42}:pedidos:<UUID>:page:0:size:20:sort:<SHA-256>
 ```
 
-Empresa, versão UUID, página e tamanho separam os resultados. Criar um pedido ou alterar seu status troca a versão da empresa **após o commit**, invalidando logicamente suas páginas e contagens. Rollback não invalida. Páginas antigas expiram pelo TTL; não há varredura de chaves nem limpeza global. O TTL começa na gravação e não é renovado por leituras.
+Empresa, versão UUID, página, tamanho e SHA-256 da ordenação separam os resultados. O namespace padrão é `tcc:v2`, correspondente ao formato interno atual; não reutilize páginas do formato anterior. Criar um pedido ou alterar seu status troca a versão da empresa **após o commit**, invalidando logicamente suas páginas e contagens. Rollback não invalida. Páginas antigas expiram pelo TTL; não há varredura de chaves nem limpeza global. O TTL começa na gravação e não é renovado por leituras.
 
 Scripts Lua verificam atomicamente a versão ao ler e gravar páginas. Uma consulta iniciada antes da invalidação pode retornar seu snapshot antigo, mas não preenche uma versão nova. A chave de versão não expira; se for expulsa por `allkeys-lru`, um UUID novo impede reutilizar páginas antigas.
 
@@ -35,7 +35,7 @@ Redis não participa de `/actuator/health`; a API depende do PostgreSQL. Falhas 
 | Variável | Padrão | Regra |
 | --- | --- | --- |
 | `CACHE_ENABLED` | `false` | Habilita Redis |
-| `CACHE_NAMESPACE` | `tcc:v1` | `tcc:` seguido de 1–60 letras, dígitos, `:`, `_` ou `-` |
+| `CACHE_NAMESPACE` | `tcc:v2` | `tcc:` seguido de 1–60 letras, dígitos, `:`, `_` ou `-` |
 | `CACHE_TTL` | `60s` | De 1ms a 1h |
 | `CACHE_TIMEOUT` | `200ms` | De 1ms a 5s por conexão/comando; não limita a requisição inteira |
 | `REDIS_HOST` | `10.10.10.30` | Endereço Redis |
@@ -43,7 +43,7 @@ Redis não participa de `/actuator/health`; a API depende do PostgreSQL. Falhas 
 | `REDIS_USER` | `app` | Usuário da ACL |
 | `REDIS_PASSWORD` | Sem padrão | Obrigatória com cache ativo; fornecida por secret |
 
-São valores iniciais, ainda sem calibração de desempenho.
+`ObjectUtils.isNotEmpty` rejeita uma senha nula ou vazia, mas considera uma senha formada só por espaços como não vazia. Os demais valores são iniciais, ainda sem calibração de desempenho.
 
 ## Configuração Docker preparada
 
@@ -79,4 +79,4 @@ docker compose --env-file infra/app/.env.example \
 
 Não há tag por empresa nem endpoint de métricas exposto por padrão. Um miss pode terminar em erro de negócio; esses contadores não equivalem a respostas HTTP bem-sucedidas. A coleta externa está pendente.
 
-A suíte descartável verifica equivalência da resposta, acertos sem banco, separação por empresa/página/tamanho, commit, rollback, TTL, corridas de preenchimento, perda de versão, JSON inválido, ACL e recuperação após pausa do Redis. O cenário sem cache verifica ausência de conexão Redis. Execução: [app/README.md](../app/README.md).
+A suíte descartável verifica equivalência da resposta, acertos sem banco, separação por empresa/página/tamanho/ordenação, commit, rollback, TTL, corridas de preenchimento, perda de versão, JSON inválido, ACL e recuperação após pausa do Redis. O cenário sem cache verifica ausência de conexão Redis. Execução: [app/README.md](../app/README.md).

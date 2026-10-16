@@ -1,5 +1,8 @@
-package br.edu.tcc.pedidos;
+package br.edu.tcc.pedidos.config;
 
+import br.edu.tcc.pedidos.cache.PaginaCache;
+import br.edu.tcc.pedidos.cache.PaginaCacheDesabilitado;
+import br.edu.tcc.pedidos.cache.RedisPaginaCache;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import io.lettuce.core.ClientOptions;
 import io.lettuce.core.SocketOptions;
@@ -26,18 +29,19 @@ public class CacheConfiguration {
     @Bean
     @ConditionalOnProperty(prefix = "app.cache", name = "enabled", havingValue = "true")
     LettuceConnectionFactory redisConnectionFactory(CacheProperties properties) {
-        var redisConfiguration = new RedisStandaloneConfiguration(properties.host(), properties.port());
+        RedisStandaloneConfiguration redisConfiguration =
+                new RedisStandaloneConfiguration(properties.host(), properties.port());
         redisConfiguration.setUsername(properties.username());
         redisConfiguration.setPassword(properties.password());
 
-        var socketOptions = SocketOptions.builder()
+        SocketOptions socketOptions = SocketOptions.builder()
                 .connectTimeout(properties.timeout())
                 .build();
-        var clientOptions = ClientOptions.builder()
+        ClientOptions clientOptions = ClientOptions.builder()
                 .disconnectedBehavior(ClientOptions.DisconnectedBehavior.REJECT_COMMANDS)
                 .socketOptions(socketOptions)
                 .build();
-        var clientConfiguration = LettuceClientConfiguration.builder()
+        LettuceClientConfiguration clientConfiguration = LettuceClientConfiguration.builder()
                 .commandTimeout(properties.timeout())
                 .clientOptions(clientOptions)
                 .build();

@@ -1,5 +1,6 @@
-package br.edu.tcc.pedidos;
+package br.edu.tcc.pedidos.event;
 
+import br.edu.tcc.pedidos.cache.PaginaCache;
 import org.springframework.stereotype.Component;
 import org.springframework.transaction.event.TransactionPhase;
 import org.springframework.transaction.event.TransactionalEventListener;
