@@ -65,6 +65,7 @@ class PedidosIntegrationTest {
     @DynamicPropertySource
     static void configurarAplicacao(DynamicPropertyRegistry propriedades) {
         propriedades.add("app.cache.enabled", () -> false);
+        propriedades.add("management.server.port", () -> 0);
         propriedades.add("spring.datasource.url", () -> POSTGRES.getJdbcUrl() + "&currentSchema=tcc");
         propriedades.add("spring.datasource.username", () -> "tcc_app");
         propriedades.add("spring.datasource.password", () -> "application-test");
@@ -254,6 +255,18 @@ class PedidosIntegrationTest {
 
         assertThat(pagina.get("totalElements").asLong()).isEqualTo(5);
         assertThat(pagina.get("content").size()).isEqualTo(2);
+        assertThat(pagina.get("content").get(0).get("total").decimalValue())
+                .isEqualByComparingTo(new BigDecimal("30.00"));
+
+        try (Connection conexao = conectarComoAdministrador();
+             PreparedStatement comando = conexao.prepareStatement(
+                     "SELECT count(*) FROM tcc.item_pedido WHERE tenant_id = ?")) {
+            comando.setLong(1, empresaGeradaId);
+            try (ResultSet resultado = comando.executeQuery()) {
+                assertThat(resultado.next()).isTrue();
+                assertThat(resultado.getLong(1)).isEqualTo(15);
+            }
+        }
 
         ExecResult importacaoRepetida = importarBaseDeTeste();
 

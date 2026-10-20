@@ -5,10 +5,10 @@ Experimento de Engenharia de Computação que compara a mesma aplicação com Po
 ## Estado atual
 
 - API implementada com empresa, cliente, pedido e item_pedido.
-- Cache opcional, desligado por padrão; 39 testes automatizados validados localmente.
-- PostgreSQL e Redis implantados anteriormente nas VMs de dados.
+- Cache opcional, desligado por padrão; 41 testes Java aprovados em 17/10/2026. Em 20/10, 53 testes Python, a suíte Node e o teste local do script k6 foram aprovados.
+- PostgreSQL e Redis implantados; em 16/10/2026 foram preparados monitoramento SQL e Redis com limite de 1 GiB.
 - API, migrações, usuários da aplicação e ACL Redis pendentes de implantação.
-- Geração de carga com k6 e campanha experimental pendentes.
+- Gerador de dados, carga k6, planejamento pareado, coleta e consolidação preparados; piloto e campanha pendentes.
 
 | VM | IP | Função |
 | --- | --- | --- |
@@ -16,7 +16,7 @@ Experimento de Engenharia de Computação que compara a mesma aplicação com Po
 | tcc-postgres | 10.10.10.20 | PostgreSQL |
 | tcc-redis | 10.10.10.30 | Redis |
 
-O estado das VMs vem do [registro de 15/10/2026](infra/DEPLOYMENT.md). Alterar arquivos locais não implanta serviços; qualquer alteração nas VMs depende de confirmação.
+O [registro das VMs](infra/DEPLOYMENT.md) separa as intervenções de 15 e 16/10/2026 da consulta após reinício em 17/10, quando as três VMs estavam desligadas. A API e a campanha não foram executadas nas VMs. Os modelos de restauração e limpeza dependem de configuração e autorização para o ambiente experimental dedicado.
 
 ## Desenvolvimento
 
@@ -38,6 +38,10 @@ Os testes usam PostgreSQL e Redis descartáveis locais, sem acessar as VMs. Não
 | Migrações | [database/README.md](database/README.md) |
 | PostgreSQL, Redis e rede | [infra/README.md](infra/README.md) |
 | Implantação da API | [infra/app/README.md](infra/app/README.md) |
+| Protocolo, limites e campanha | [docs/EXPERIMENTO.md](docs/EXPERIMENTO.md) |
+| Validações e pendências | [docs/VALIDACAO.md](docs/VALIDACAO.md) |
+| Trocas exatas no texto do TCC | [docs/AJUSTES_TEXTO_TCC.md](docs/AJUSTES_TEXTO_TCC.md) |
+| Carga e execução | [load/README.md](load/README.md) |
 | Versões | [VERSIONS.md](VERSIONS.md) |
 
-`scripts/` contém o gerador de dados. `load/` e `monitoring/` estão reservados para as próximas etapas; `results/` guarda resultados locais ignorados pelo Git.
+`scripts/` gera SQL sem acessar o banco. `load/` prepara manifestos, plano, carga e consolidação; `monitoring/` coleta recursos e contadores. `results/` guarda resultados locais ignorados pelo Git. A comparação definitiva compreende 200 execuções; não há resultados de desempenho ainda.

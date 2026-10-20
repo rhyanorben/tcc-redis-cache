@@ -66,6 +66,11 @@ public class PedidoService {
                 .orElseThrow(() -> new ResponseStatusException(
                         HttpStatus.NOT_FOUND,
                         "Pedido não encontrado nesta empresa"));
+
+        if (pedido.getStatus() == status) {
+            return pedido;
+        }
+
         pedido.alterarStatus(status);
         pedidoRepository.save(pedido);
         publicarAlteracaoPedidos(tenantId);

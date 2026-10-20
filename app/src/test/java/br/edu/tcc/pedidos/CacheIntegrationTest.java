@@ -44,6 +44,7 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
+import org.springframework.boot.test.web.server.LocalManagementPort;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
@@ -125,6 +126,9 @@ class CacheIntegrationTest {
     @LocalServerPort
     int porta;
 
+    @LocalManagementPort
+    int portaGerenciamento;
+
     private final HttpClient clienteHttp = HttpClient.newHttpClient();
     private long empresaId;
     private long clienteId;
@@ -140,6 +144,7 @@ class CacheIntegrationTest {
         propriedades.add("spring.flyway.user", () -> "tcc_migrator");
         propriedades.add("spring.flyway.password", () -> "migration-test");
         propriedades.add("app.cache.enabled", () -> true);
+        propriedades.add("management.server.port", () -> 0);
         propriedades.add("app.cache.host", REDIS::getHost);
         propriedades.add("app.cache.port", () -> REDIS.getMappedPort(6379));
         propriedades.add("app.cache.password", () -> APP_PASSWORD);
@@ -241,6 +246,38 @@ class CacheIntegrationTest {
                 .orElseThrow();
 
         assertThat(pedidoAtualizado.status()).isEqualTo(StatusPedido.CONFIRMADO);
+    }
+
+    @Test
+    void statusRepetidoPreservaPaginaEVersaoDoCache() {
+        Pedido pedido = criarPedido();
+        Pedido pedidoAtualizado = pedidos.alterarStatus(empresaId, pedido.getId(), StatusPedido.CONFIRMADO);
+        consultas.listar(empresaId, paginacao(0, 20));
+        String geracaoOriginal = buscarGeracaoCache(empresaId);
+        double invalidacoesOriginais = contarMetrica("tcc.cache.invalidations");
+
+        Pedido pedidoSemAlteracao = pedidos.alterarStatus(empresaId, pedido.getId(), StatusPedido.CONFIRMADO);
+
+        assertThat(pedidoSemAlteracao.getAtualizadoEm()).isEqualTo(pedidoAtualizado.getAtualizadoEm());
+        assertThat(buscarGeracaoCache(empresaId)).isEqualTo(geracaoOriginal);
+        assertThat(contarMetrica("tcc.cache.invalidations")).isEqualTo(invalidacoesOriginais);
+        assertThat(cache.buscarOuCarregar(empresaId, paginacao(0, 20), () -> {
+            throw new AssertionError("Status repetido deve preservar a página em cache");
+        }).getContent().getFirst().status()).isEqualTo(StatusPedido.CONFIRMADO);
+    }
+
+    @Test
+    void metricasFicamNaPortaDeGerenciamento() throws Exception {
+        criarPedido();
+        consultas.listar(empresaId, paginacao(0, 20));
+        consultas.listar(empresaId, paginacao(0, 20));
+
+        HttpResponse<String> resposta = consultarGerenciamento("/actuator/metrics/tcc.cache.requests?tag=result:hit");
+
+        assertThat(resposta.statusCode()).isEqualTo(200);
+        assertThat(json.readTree(resposta.body()).get("measurements").get(0).get("value").asDouble())
+                .isGreaterThanOrEqualTo(1);
+        assertThat(consultarApi("/actuator/metrics", null).statusCode()).isEqualTo(404);
     }
 
     @Test
@@ -366,7 +403,7 @@ class CacheIntegrationTest {
             criarPedido();
 
             assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
-            assertThat(consultarApi("/actuator/health", null).statusCode()).isEqualTo(200);
+            assertThat(consultarGerenciamento("/actuator/health").statusCode()).isEqualTo(200);
         } finally {
             REDIS.getDockerClient().unpauseContainerCmd(REDIS.getContainerId()).exec();
         }
@@ -484,6 +521,12 @@ class CacheIntegrationTest {
 
     private double contarMetrica(String nome) {
         return metricas.get(nome).counter().count();
+    }
+
+    private HttpResponse<String> consultarGerenciamento(String caminho) throws Exception {
+        HttpRequest requisicao = HttpRequest.newBuilder(URI.create(
+                "http://127.0.0.1:" + portaGerenciamento + caminho)).GET().build();
+        return clienteHttp.send(requisicao, HttpResponse.BodyHandlers.ofString());
     }
 
     private HttpResponse<String> consultarApi(String caminho, Long empresaId) throws Exception {

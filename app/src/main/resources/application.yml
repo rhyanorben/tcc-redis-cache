@@ -42,13 +42,16 @@ server:
     include-stacktrace: never
 
 management:
+  server:
+    port: ${MANAGEMENT_PORT:8081}
+    address: ${MANAGEMENT_BIND_ADDRESS:127.0.0.1}
   health:
     redis:
       enabled: false
   endpoints:
     web:
       exposure:
-        include: health
+        include: health,metrics
   endpoint:
     health:
       show-details: never

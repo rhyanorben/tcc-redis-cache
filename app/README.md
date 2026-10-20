@@ -44,3 +44,14 @@ curl -i -X PATCH http://10.10.10.10:8080/api/pedidos/1/status \
 ```
 
 O último exemplo também exige o ID do pedido criado. O cabeçalho seleciona a empresa do laboratório; não autentica usuários.
+
+## Saúde e coleta
+
+`health` e `metrics` ficam na porta administrativa 8081. No Compose, ela é publicada somente em `127.0.0.1` da VM; execute a verificação e o coletor localmente:
+
+```sh
+curl --fail http://127.0.0.1:8081/actuator/health
+curl --fail http://127.0.0.1:8081/actuator/metrics/tcc.cache.requests
+```
+
+A API sem cache não registra atividade Redis. A campanha mede acertos lógicos pelo contador da aplicação; veja o [protocolo](../docs/EXPERIMENTO.md).

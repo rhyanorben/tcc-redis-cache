@@ -26,9 +26,9 @@ Scripts Lua verificam atomicamente a versão ao ler e gravar páginas. Uma consu
 - Erros de conexão, timeout ou conteúdo inválido levam a consulta do PostgreSQL. Erros de negócio e banco continuam sendo propagados; erros de banco e respostas 404 não são armazenados.
 - Se a invalidação falhar após commit, um marcador em memória mantém a empresa consultando o banco até reparar sua versão. Cada tentativa usa um UUID novo; a reparação remove o marcador correspondente. Uma falha prolongada mantém uma entrada por empresa afetada.
 - A reparação funciona em uma instância. Os marcadores não são duráveis nem compartilhados: um encerramento entre commit e invalidação pode deixar páginas antigas até o TTL. Não há outbox, coordenação entre instâncias ou proteção contra consultas simultâneas à mesma página fria.
-- SQL direto, geração de dados, restaurações e escritas com cache desligado não invalidam Redis. Antes de reabilitá-lo, use um namespace novo. Também troque o namespace ao mudar consulta/formato; não compare instâncias escrevendo simultaneamente na mesma base com cache ligado e desligado.
+- SQL direto, geração de dados, restaurações e escritas com cache desligado não invalidam Redis. Fora da campanha, use um namespace novo ao reabilitar o cache ou mudar consulta/formato. Na campanha, limpe fisicamente o banco Redis experimental antes de cada execução: mudar somente o namespace preserva memória e estatísticas de páginas antigas. Não compare instâncias escrevendo simultaneamente na mesma base com cache ligado e desligado.
 
-Redis não participa de `/actuator/health`; a API depende do PostgreSQL. Falhas de cache geram contadores e um aviso limitado a um por 30 segundos por instância, sem credenciais ou conteúdo. Não há circuit breaker: durante falhas, requisições ainda podem pagar timeouts de vários comandos.
+Redis não participa de `/actuator/health` na porta administrativa local; a API depende do PostgreSQL. Falhas de cache geram contadores e um aviso limitado a um por 30 segundos por instância, sem credenciais ou conteúdo. Não há circuit breaker: durante falhas, requisições ainda podem pagar timeouts de vários comandos.
 
 ## Configuração
 
@@ -43,7 +43,7 @@ Redis não participa de `/actuator/health`; a API depende do PostgreSQL. Falhas 
 | `REDIS_USER` | `app` | Usuário da ACL |
 | `REDIS_PASSWORD` | Sem padrão | Obrigatória com cache ativo; fornecida por secret |
 
-`ObjectUtils.isNotEmpty` rejeita uma senha nula ou vazia, mas considera uma senha formada só por espaços como não vazia. Os demais valores são iniciais, ainda sem calibração de desempenho.
+`ObjectUtils.isNotEmpty` rejeita uma senha nula ou vazia, mas considera uma senha formada só por espaços como não vazia. Na campanha, mantenha TTL de 60 s, timeout de 200 ms, Redis com `maxmemory=1gb` (1 GiB) e `allkeys-lru`, sem persistência. O piloto deve conferir capacidade e efeitos de expiração/expulsão sem alterar parâmetros entre modos ou repetições.
 
 ## Configuração Docker preparada
 
@@ -77,6 +77,6 @@ docker compose --env-file infra/app/.env.example \
 | `tcc.cache.invalidations` | Trocas de versão concluídas, incluindo reparações |
 | `tcc.cache.discarded_writes` | Páginas descartadas por versão alterada ou invalidação pendente |
 
-Não há tag por empresa nem endpoint de métricas exposto por padrão. Um miss pode terminar em erro de negócio; esses contadores não equivalem a respostas HTTP bem-sucedidas. A coleta externa está pendente.
+Não há tag por empresa. `health` e `metrics` ficam na porta administrativa 8081, publicada somente no loopback da VM. O coletor HTTP local consulta os contadores, sem expor essa porta à rede de carga. Um miss pode terminar em erro de negócio; esses contadores não equivalem a respostas HTTP bem-sucedidas. A taxa de acerto lógico é `hit / (hit + miss + fallback)`, com a proporção de fallback também apresentada separadamente. Hits/misses de `INFO stats` Redis incluem chaves auxiliares e devem ser registrados separadamente do acerto lógico das páginas. Veja [EXPERIMENTO.md](EXPERIMENTO.md) para coleta, drenagem e consolidação.
 
 A suíte descartável verifica equivalência da resposta, acertos sem banco, separação por empresa/página/tamanho/ordenação, commit, rollback, TTL, corridas de preenchimento, perda de versão, JSON inválido, ACL e recuperação após pausa do Redis. O cenário sem cache verifica ausência de conexão Redis. Execução: [app/README.md](../app/README.md).

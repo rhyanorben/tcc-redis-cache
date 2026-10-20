@@ -67,13 +67,13 @@ A última chamada deve retornar `NOAUTH`. O healthcheck PostgreSQL verifica disp
 
 | Serviço | Decisões |
 | --- | --- |
-| PostgreSQL | Volume persistente, SCRAM-SHA-256, UTC e durabilidade padrão |
-| Redis | Sem RDB/AOF ou volume; reinício deixa cache frio; `maxmemory=256mb`, `allkeys-lru` |
+| PostgreSQL | Volume persistente, SCRAM-SHA-256, UTC, durabilidade padrão e `pg_stat_statements` |
+| Redis | Sem RDB/AOF ou volume; reinício deixa cache frio; `maxmemory=1gb` (1 GiB), `allkeys-lru` |
 | Imagens | Digests fixados nos `.env.example`; versões em [VERSIONS.md](../VERSIONS.md) |
 
-`POSTGRES_DB`, `POSTGRES_USER` e a senha inicial só atuam em volume vazio. Alterar os arquivos não muda credenciais existentes; não apague volumes para corrigir configuração nem troque a versão principal sem migração planejada. `tcc_admin` é administrativo; a API usa [roles separadas](app/README.md). A [ACL Redis da API](../docs/CACHE.md) está preparada, ainda não aplicada.
+`POSTGRES_DB`, `POSTGRES_USER` e a senha inicial só atuam em volume vazio. Alterar os arquivos não muda credenciais existentes; não apague volumes para corrigir configuração nem troque a versão principal sem migração planejada. `tcc_admin` é administrativo; a API usa [roles separadas](app/README.md). A [ACL Redis da API](../docs/CACHE.md) está preparada, ainda não aplicada. O provisionamento de monitoramento SQL fica separado das roles de negócio; a role de coleta não modifica tabelas da aplicação. Confira o [registro de 16/10/2026](DEPLOYMENT.md) antes de executar qualquer configuração novamente.
 
-Não há TLS nem limites de CPU/RAM nos contêineres. Use apenas a rede experimental confiável e registre os recursos das VMs antes dos ensaios. O processo Redis pode consumir mais memória que `maxmemory`. Remoção de volumes/dados, inclusive `down -v`, exige confirmação.
+Não há TLS nem limites de CPU/RAM nos contêineres. Use apenas a rede experimental confiável. As VMs de aplicação/PostgreSQL possuem 2 vCPU e 4 GiB cada, e a VM Redis possui 1 vCPU e 2 GiB, conforme verificação de 16/10/2026; reconfirme e registre antes da campanha. O processo Redis pode consumir mais memória que `maxmemory`. Remoção de volumes/dados, inclusive `down -v`, exige confirmação.
 
 ## Restrição de rede
 

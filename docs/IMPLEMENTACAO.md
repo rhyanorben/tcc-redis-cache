@@ -71,7 +71,8 @@ Empresa inexistente retorna 404. Empresa sem pedidos ou página além do fim ret
 | POST | `/api/clientes` | Nome + tenant → 201 com ID |
 | POST | `/api/pedidos` | Cliente e itens + tenant → 201 com resumo |
 | PATCH | `/api/pedidos/{id}/status` | `{"status":"CONFIRMADO"}` + tenant → resumo atualizado |
-| GET | `/actuator/health` | Saúde da API e PostgreSQL, sem detalhes de credenciais |
+| GET | Porta administrativa local, `/actuator/health` | Saúde da API e PostgreSQL, sem detalhes de credenciais |
+| GET | Porta administrativa local, `/actuator/metrics` | Contadores para o coletor na VM da aplicação |
 
 Veja [exemplos HTTP](../app/README.md). Não há exclusão, frontend ou pagamentos. O [cache opcional](CACHE.md) preserva o mesmo contrato.
 
@@ -81,18 +82,18 @@ Na raiz do repositório:
 
 ```sh
 python3 scripts/gerar_base.py --empresas 10 --clientes-por-empresa 20 \
-  --pedidos-por-empresa 10000 --lote exp-001 --saida /tmp/tcc-exp-001.sql
+  --pedidos-por-empresa 10000 --itens-por-pedido 3 --lote exp-001 --saida /tmp/tcc-exp-001.sql
 ```
 
-O gerador cria um arquivo SQL novo, sem conexão com o banco: 100.000 pedidos, um item de R$ 10,00 por pedido, clientes distribuídos ciclicamente e datas determinísticas. Essa distribuição uniforme é uma carga inicial; não representa todos os padrões de um SaaS.
+O exemplo gera um arquivo SQL novo, sem conexão com o banco: 100.000 pedidos e 300.000 itens, clientes distribuídos ciclicamente e datas determinísticas. Cada item possui quantidade 1 e preço de R$ 10,00; o total do pedido corresponde à soma dos itens. A base definitiva contém 100 empresas, cada uma com 5.000 clientes e 20.000 pedidos de três itens: 8.500.100 registros. Não há entidade produto. Essa distribuição controlada não representa todos os padrões de um SaaS.
 
-Após revisão e confirmação, aplique o arquivo como `tcc_migrator`, proprietário das tabelas, com `psql -X -v ON_ERROR_STOP=1 -f ARQUIVO`. O SQL inclui `ANALYZE` e retorna os IDs das empresas; não presuma IDs iniciando em 1. A carga recusa lotes existentes sem apagar dados. Não execute duas cargas simultâneas: essa verificação não garante idempotência concorrente. Aumente o volume gradualmente conforme o espaço disponível.
+Após revisão e confirmação, aplique o arquivo como `tcc_migrator`, proprietário das tabelas, com `psql -X -v ON_ERROR_STOP=1 -f ARQUIVO`. O SQL inclui `ANALYZE` e retorna os IDs das empresas; não presuma IDs iniciando em 1. A carga valida contagens por empresa, quantidade de itens e totais de cada pedido antes do commit. Lotes existentes são recusados sem apagar dados; execuções do mesmo lote são serializadas no banco, evitando a duplicação concorrente desse lote. Aumente o volume gradualmente conforme o espaço disponível.
 
 ## Próximas etapas
 
-1. Implantar e validar a API sem cache, com usuários e migrações separados.
-2. Carregar dados representativos e revisar os planos SQL.
-3. Habilitar o cache e validar os dois cenários na mesma base.
-4. Configurar k6 no segundo computador, repetir os ensaios e coletar latências, vazão, erros e recursos.
+1. Implantar e validar a API, os usuários e as migrações em uma base experimental isolada.
+2. Carregar e conferir a base, revisar planos SQL e preparar backup/restauração.
+3. Configurar a VM de carga no segundo computador e validar os coletores.
+4. Executar o piloto e depois a campanha conforme [EXPERIMENTO.md](EXPERIMENTO.md).
 
-Controle também a distribuição de empresas e páginas acessadas, pois ela determina a taxa de acertos do cache.
+O protocolo fixa paginação, 25 empresas ativas, localidade, escritas efetivas, TTL, pareamento e coleta. Os arquivos preparados não representam validação remota desses procedimentos.

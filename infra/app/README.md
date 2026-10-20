@@ -48,10 +48,10 @@ Prossiga somente se a migração terminar com código zero:
 docker compose up -d app
 docker compose ps
 docker compose logs --tail=100 app
-curl --fail http://10.10.10.10:8080/actuator/health
+curl --fail http://127.0.0.1:8081/actuator/health
 ```
 
-`migrate` aplica Flyway e termina sem servidor HTTP. A API recebe apenas a credencial runtime e publica 8080 em `10.10.10.10`. O pool padrão tem dez conexões, configuráveis em `.env`. O cenário base mantém Redis desligado.
+`migrate` aplica Flyway e termina sem servidor HTTP. A API recebe apenas a credencial runtime e publica 8080 em `10.10.10.10`. A porta administrativa 8081 publica somente no loopback da VM e fornece `health` e `metrics` para verificação/coleta local. O pool padrão tem dez conexões, configuráveis em `.env`. O cenário base mantém Redis desligado.
 
 O build Docker ainda precisa ser validado. Antes dos ensaios, registre os digests das bases e da imagem final; use o mesmo artefato nos dois cenários. Não há TLS ou autenticação de usuários: use somente a rede experimental confiável.
 
