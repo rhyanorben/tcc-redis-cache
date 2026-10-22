@@ -1,0 +1,13 @@
+network:
+  version: 2
+  ethernets:
+    tcc-experimental:
+      match:
+        macaddress: "52:54:00:20:20:10"
+      dhcp4: false
+      dhcp6: false
+      accept-ra: false
+      link-local: []
+      addresses:
+        - 10.20.20.10/24
+      optional: true

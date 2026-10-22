@@ -9,7 +9,7 @@ CREATE SCHEMA tcc AUTHORIZATION tcc_migrator;
 GRANT CONNECT ON DATABASE tcc TO tcc_migrator, tcc_app;
 GRANT USAGE ON SCHEMA tcc TO tcc_app;
 
-COMMIT;
-
 \password tcc_migrator
 \password tcc_app
+
+COMMIT;

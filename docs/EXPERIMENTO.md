@@ -1,6 +1,6 @@
 # Protocolo experimental
 
-Este protocolo fixa as condições para comparar a mesma API com cache desligado e ligado. Os arquivos de carga e coleta estão preparados; a API, a base completa e a campanha ainda não foram implantadas ou executadas nas VMs.
+Este protocolo fixa as condições para comparar a mesma API com cache desligado e ligado. A API foi implantada e validada funcionalmente nas VMs em 20/10/2026. A base completa e os hooks remotos foram preparados em 22/10/2026; o [registro da preparação e do piloto](PREPARACAO_E_PILOTO.md) apresenta as evidências. A campanha completa permanece pendente.
 
 ## Condições fixas
 
@@ -30,13 +30,13 @@ Exemplo de geração de SQL, sem conectar ou alterar o banco:
 
 ```sh
 python3 scripts/gerar_base.py --empresas 100 --clientes-por-empresa 5000 \
-  --pedidos-por-empresa 20000 --itens-por-pedido 3 --lote tcc-base-v1 \
+  --pedidos-por-empresa 20000 --itens-por-pedido 3 --lote base-v1 \
   --saida /tmp/tcc-base-v1.sql
 ```
 
 Use os IDs efetivamente gerados; eles não precisam começar em 1. A listagem consulta pedidos e clientes; os itens compõem a base e as operações de negócio, mas não são carregados pela leitura avaliada.
 
-Após implantar e validar a API e os coletores, execute um piloto curto. Confirme operações efetivas de escrita, ausência de erros de contrato, distribuição de páginas/empresas, diferença entre hit e miss e ausência de sobrecarga no gerador. O piloto valida o procedimento; não substitui as repetições finais nem fornece resultados da campanha.
+Após preparar a VM de carga, carregar a base e validar os coletores e hooks, execute um piloto curto. Confirme operações efetivas de escrita, ausência de erros de contrato, distribuição de páginas/empresas, diferença entre hit e miss e ausência de sobrecarga no gerador. O piloto valida o procedimento; não substitui as repetições finais nem fornece resultados da campanha.
 
 ## Campanha e pareamento
 
@@ -56,14 +56,14 @@ Os sete minutos de cada execução somam no mínimo 23h20. Restauração, iníci
 
 1. Pare a geração de carga e espere terminar todas as requisições anteriores.
 2. Restaure uma cópia da mesma base de referência no banco experimental isolado. Confira o resultado antes de prosseguir.
-3. Limpe fisicamente o banco Redis dedicado ao experimento. Mudar apenas o namespace não libera páginas antigas e não estabelece a mesma condição inicial de memória e expulsões.
-4. Selecione o modo da API; mantenha a imagem e todas as outras configurações constantes. Espere a API ficar pronta.
+3. Selecione o modo da API; mantenha a imagem e todas as outras configurações constantes. Espere a API ficar pronta.
+4. Limpe fisicamente o banco Redis dedicado ao experimento, antes do aquecimento. Mudar apenas o namespace não libera páginas antigas e não estabelece a mesma condição inicial de memória e expulsões.
 5. Verifique os coletores, os relógios e as referências de empresas e pedidos.
 6. Execute o aquecimento somente com leituras. Drene suas requisições antes da janela de medição.
 7. Registre os contadores iniciais, execute os 300 s de medição e drene as requisições finais antes dos contadores finais.
 8. Guarde os arquivos originais, o plano e a identificação dos artefatos; encerre os coletores.
 
-Backup, restauração, limpeza Redis e seleção do modo são integrações explícitas do executor. Os [contratos dos hooks](../load/hooks.example/README.md) estão documentados, mas seus executáveis específicos do ambiente ainda não foram implementados. O executor recusa a execução se faltar qualquer hook; a preparação local não equivale a uma restauração remota validada. Esses passos podem substituir dados e exigem um destino experimental dedicado e autorização antes da execução. Nenhuma campanha ou limpeza Redis foi executada para preparar estes arquivos.
+Backup, restauração, limpeza Redis e seleção do modo são integrações explícitas do executor. Os [hooks das VMs](../infra/experiment/README.md) usam sessões temporárias autenticadas manualmente e o banco dedicado `tcc_experimento`. A restauração foi validada em uma cópia independente antes do piloto. O executor recusa hooks ausentes e interrompe a execução diante de falhas; os [contratos](../load/hooks.example/README.md) permanecem como referência para outros ambientes.
 
 ## Coleta e limites de atribuição
 

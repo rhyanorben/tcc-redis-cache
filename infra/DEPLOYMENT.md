@@ -70,3 +70,55 @@ No computador de desenvolvimento, em contêineres Docker descartáveis, os 41 te
 ## Consulta de estado — 20/10/2026
 
 A consulta somente leitura ao libvirt confirmou `tcc-app`, `tcc-postgres` e `tcc-redis` desligadas. Não foram iniciadas VMs nem revalidados os serviços por SSH. As intervenções de 16/10 permanecem como histórico; a confirmação dos serviços em execução depende de autorização específica para ligar as VMs.
+
+
+## Retomada e implantação da API — 20/10/2026
+
+Após o usuário informar que as três VMs estavam em funcionamento e autorizar os procedimentos, a implantação foi executada via SSH. As consultas anteriores desta data permanecem como histórico; o estado final abaixo as sucede.
+
+| VM | Estado confirmado |
+| --- | --- |
+| tcc-app | API em Docker em `10.10.10.10:8080`; gerenciamento publicado somente em `127.0.0.1:8081` |
+| tcc-postgres | PostgreSQL 17.11; schema `tcc`, usuários separados e migração Flyway V1 aplicada |
+| tcc-redis | Redis 7.4.11; usuário `app` restrito, 1 GiB, `allkeys-lru`, sem AOF/RDB |
+
+Docker Engine 29.9.1, Compose 5.6.0, containerd 2.4.2 e Buildx 0.38.0 foram instalados na tcc-app, sem atualização geral do sistema. O código da API fica em `/home/rhyan/tcc-app`, a partir do commit `b1112e254d41fc3f15a41aff67b19a68ba922ddc`. A imagem `tcc-pedidos:0.1.0`, com Temurin 21.0.12.1+1, foi a mesma nos dois modos; seu ID consta em [VERSIONS.md](../VERSIONS.md).
+
+Antes das alterações foi criado `~/tcc-infra/infra/postgres/backups/antes-api-20261020T113919Z/tcc.dump`. O backup não foi restaurado e não representa a base inicial da campanha. O provisionamento criou `tcc_migrator` e `tcc_app` sem privilégios de superusuário, criação de banco ou criação de roles; o migrador é proprietário do schema `tcc`. O script foi revisado para definir as senhas antes do commit. A API confirmou acesso a pedidos, sem acesso ao histórico Flyway ou permissão de criação no schema.
+
+As credenciais de negócio na VM PostgreSQL têm modo 600. Na tcc-app, os secrets têm modo 640, proprietário `rhyan` e grupo numérico 10001, com diretório 700. A senha da aplicação Redis tem modo 600 na VM Redis e 640 na tcc-app. Credenciais não foram registradas em Git ou nos relatórios.
+
+A configuração Redis anterior foi preservada com identificação `acl-app-20261020T114431Z`; o serviço foi recriado após confirmar `DBSIZE=0`. A ACL da aplicação autenticou e negou acesso fora de `tcc:*` e `FLUSHALL` por verificação de permissão, sem executar esse comando. Ao administrar o Redis, use `-f compose.yaml -f compose.app-user.yaml`; na API com cache, use `-f compose.yaml -f compose.cache.yaml`.
+
+A validação sem cache aprovou 357 checagens em 30 requisições; com cache, 104 em 47 requisições. Confirmou equivalência das respostas, isolamento, paginação, falta seguida de acerto, invalidação após mudança real e ausência de invalidação ao repetir o status. Uma página recém-gravada apresentou 59.880 ms de prazo restante. Foram mantidos dois clientes, seis pedidos e 18 itens nas duas empresas do lote `TCC-validacao-f963091e25334c2d`, IDs 1 e 2 nesta execução.
+
+O estado final mantém cache habilitado, namespace `tcc:vm-validacao-20261020`, TTL de 60 s e timeout de 200 ms. Os relatórios ficam em `results/implantacao-20261020/`, ignorados pelo Git; veja [VALIDACAO.md](../docs/VALIDACAO.md). Não foram carregados os 8,5 milhões de registros nem executados piloto ou campanha. Host 2, restauração da base experimental e integração dos hooks remotos continuam pendentes.
+
+
+## Ethernet do computador 1 — 21/10/2026
+
+A intervenção autorizada criou a bridge persistente `br-tcc`, com `10.20.20.1/24`, e vinculou a Ethernet `enp4s0`, em enlace de 1 Gbps e duplex completo. A rede experimental não recebe gateway, DNS ou IPv6; a internet permanece em `wlo1`, pelo gateway `192.168.10.1`. O Wi-Fi e `50-cloud-init.yaml` do host foram comparados com suas cópias e preservados.
+
+A tcc-app recebeu uma segunda NIC virtio, `enp7s0`, MAC `52:54:00:20:20:10`, no XML ativo e persistente. O novo arquivo Netplan aplica `10.20.20.10/24` por MAC, sem DHCP, gateway ou DNS; a interface privada permanece inalterada. `compose.ethernet.yaml` acrescenta a publicação HTTP experimental, preservando `10.10.10.10:8080` e `127.0.0.1:8081`. Somente a aplicação foi recriada, com a mesma imagem e cache habilitado. Nenhuma regra manual de firewall foi acrescentada; Docker atualizou as regras das publicações.
+
+| Verificação | Resultado |
+| --- | --- |
+| HTTP pelo computador 1 | Endereços privado e experimental retornaram 200, com conteúdo igual |
+| HTTP pela tcc-load | GET em `10.20.20.10:8080/api/pedidos`, com `tenantId: 1`, retornou 200 e três pedidos |
+| tcc-app → PostgreSQL e Redis | TCP privado e operação da aplicação preservados; falta seguida de acerto, sem fallback |
+| Internet e rotas | HTTPS funcional; saída original preservada no host e na tcc-app |
+| Portas no IP experimental | 5432, 6379 e 8081 recusadas |
+| Computador 2 e tcc-load | ARP confirmado nos dois endereços; host e tcc-app alcançam a tcc-load por ping e TCP 22 |
+
+Inicialmente não havia respostas ARP. O driver `r8168` 8.052.01 apresentava transmissão e interrupções praticamente paradas; reassociá-lo não resolveu. A troca para o `r8169` do kernel restaurou imediatamente a comunicação. O pacote `driverctl` 0.115-1 foi instalado para persistir a escolha somente no dispositivo PCI `0000:04:00.0`, preservando o driver anterior para reversão. O Windows respondeu ARP, embora não tenha respondido ICMP; a tcc-load respondeu ping e SSH. Não foi necessário liberar ICMP no Windows.
+
+Na tcc-app, a rota para a tcc-load usa `enp7s0`, com origem `10.20.20.10`; no gerador, a rota para a API usa `ens37`, com origem `10.20.20.40`. O GET remoto confirmou o caminho completo pela Ethernet. Não houve ensaio de carga ou reinicialização para testar persistência. As configurações persistidas, cópias de segurança e reversão estão em [ETHERNET.md](network/ETHERNET.md).
+
+
+## Base completa e piloto — 22/10/2026
+
+A preparação autorizada ampliou somente o volume lógico PostgreSQL para 32 GiB, dentro do disco virtual existente. O banco `tcc` anterior foi preservado e copiado para backup; a migração V1 e os 8.500.100 registros foram aplicados em `tcc_experimento`. `compose.experiment.yaml` seleciona esse destino sem alterar o `.env` anterior ou a imagem da API.
+
+A referência `base-v1.dump` foi restaurada em uma base temporária, com todas as contagens conferidas, e copiada para a geradora no computador 2 com o mesmo hash. Docker 29.9.1, Compose 5.6.0 e o contêiner k6 1.6.0 fixado foram preparados na tcc-load. Os agentes de preparação usam SSH/sudo autenticado manualmente em sessões temporárias, sem novas chaves permanentes ou regras sudo sem senha.
+
+Par 90/10, 25 usuários, cache desligado/ligado: duas medições completas de 300 s, sem erros, com restauração e coleta válidas O [registro da preparação](../docs/PREPARACAO_E_PILOTO.md) reúne espaço, índices, recuperação e evidências; a [operação dos hooks](experiment/README.md) descreve autenticação, repetição e reversão. A campanha completa não foi iniciada.

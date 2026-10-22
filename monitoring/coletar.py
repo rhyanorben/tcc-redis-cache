@@ -83,9 +83,9 @@ def app_statistics(base_url):
     return result
 
 
-def postgres_statistics(compose_file):
+def postgres_statistics(compose_file, database="tcc"):
     arguments = ['exec', '-T', 'postgres', 'psql', '-X', '-At', '-v', 'ON_ERROR_STOP=1',
-                 '-U', 'tcc_monitor', '-d', 'tcc', '-c', SQL_STATISTICS]
+                 '-U', 'tcc_monitor', '-d', database, '-c', SQL_STATISTICS]
     return json.loads(execute(compose_command(compose_file, arguments)))
 
 
@@ -104,12 +104,12 @@ def redis_statistics(compose_file):
     return fields
 
 
-def collect(service, compose_file, base_url):
+def collect(service, compose_file, base_url, database="tcc"):
     result = {'docker': docker_statistics(compose_file, service)}
     if service == 'app':
         result['application'] = app_statistics(base_url)
     elif service == 'postgres':
-        result['postgres'] = postgres_statistics(compose_file)
+        result['postgres'] = postgres_statistics(compose_file, database)
     else:
         result['redis'] = redis_statistics(compose_file)
     return result
@@ -123,6 +123,7 @@ def parse_arguments():
     parser.add_argument('--duration', type=float, default=360)
     parser.add_argument('--interval', type=float, default=5)
     parser.add_argument('--delay', type=float, default=0)
+    parser.add_argument('--database', default='tcc')
     parser.add_argument('--management-url', default='http://127.0.0.1:8081')
     arguments = parser.parse_args()
     if arguments.duration <= 0 or arguments.interval <= 0 or arguments.delay < 0:
@@ -146,7 +147,7 @@ def main():
             sample = {'timestamp': utc_now(), 'elapsed_seconds': time.monotonic() - start,
                       'service': arguments.service}
             try:
-                sample.update(collect(arguments.service, arguments.compose, arguments.management_url))
+                sample.update(collect(arguments.service, arguments.compose, arguments.management_url, arguments.database))
             except (RuntimeError, OSError, ValueError, urllib.error.URLError, subprocess.TimeoutExpired) as error:
                 sample['error'] = type(error).__name__ + ': ' + str(error)
                 failed = True

@@ -1,0 +1,7 @@
+services:
+  app:
+    environment:
+      DB_URL: jdbc:postgresql://10.10.10.20:5432/tcc_experimento?currentSchema=tcc
+  migrate:
+    environment:
+      DB_URL: jdbc:postgresql://10.10.10.20:5432/tcc_experimento?currentSchema=tcc

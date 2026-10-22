@@ -1,0 +1,10 @@
+{
+  "service": "app",
+  "database": "tcc_experimento",
+  "compose": "/home/rhyan/tcc-app/infra/app/compose.yaml",
+  "root": "/home/rhyan/tcc-experimento/execucoes",
+  "collector": "/opt/tcc-experiment/coletar.py",
+  "export_sql": "/opt/tcc-experiment/exportar_manifesto.sql",
+  "backup": "/home/rhyan/tcc-experimento/backups/base-v1.dump",
+  "backup_sha256": "84af910f36b945af6080fc8bb8df2a39835dfa388cd81689ab40483a64baa58f"
+}

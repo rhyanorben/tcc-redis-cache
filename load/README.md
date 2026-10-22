@@ -24,14 +24,14 @@ mas a duração fixa pode gerar quantidades de requisições diferentes entre mo
 Primeiro gere e carregue a base definitiva descrita em `docs/EXPERIMENTO.md`. O exportador
 SQL abaixo faz somente leitura e exige 100 empresas do lote, com 5.000 clientes, 20.000 pedidos
 e 60.000 itens por empresa. Ele reserva os IDs reais de 20 pedidos `ABERTO` por empresa.
-Use uma role que tenha `SELECT` nessas tabelas. A opção `-q` evita misturar mensagens SQL ao CSV.
+Execute a exportação na rede privada com uma role que tenha `SELECT` nessas tabelas. A opção `-q` evita misturar mensagens SQL ao CSV. Na geradora, os hooks acessam o PostgreSQL por SSH através da tcc-app; a porta do banco permanece privada.
 
 ```bash
 mkdir -p results/preparacao
-psql -X -q -h 10.10.10.20 -U tcc_app -d tcc \
-  -v lote=exp-001 -f load/exportar_manifesto.sql > results/preparacao/pedidos.csv
+psql -X -q -h 10.10.10.20 -U tcc_app -d tcc_experimento \
+  -v lote=base-v1 -f load/exportar_manifesto.sql > results/preparacao/pedidos.csv
 python3 load/criar_manifesto.py --csv results/preparacao/pedidos.csv \
-  --lote exp-001 --saida results/preparacao/manifesto.json
+  --lote base-v1 --saida results/preparacao/manifesto.json
 python3 load/planejar.py --manifesto results/preparacao/manifesto.json \
   --seed 20261017 --saida results/plano-exp-001
 python3 load/executar.py --plano results/plano-exp-001/plan.json --limite 2
@@ -42,10 +42,10 @@ arquivos/diretórios novos; não sobrescrevem uma preparação anterior.
 
 ## Executar após preparar os hooks
 
-`hooks.example/README.md` define os seis contratos necessários. A pasta contém documentação,
-sem implementações executáveis. O runner recusa executar enquanto os hooks não existirem.
-Restauração, alteração de modo e limpeza física do cache são operações reais no ambiente:
-revise os hooks, escolha um banco experimental dedicado e valide a restauração do backup antes.
+`hooks.vm/` implementa os seis contratos para as VMs do TCC. Use o procedimento de
+[autenticação manual e execução](../infra/experiment/README.md): as sessões temporárias
+precisam estar abertas antes de iniciar o executor. `hooks.example/README.md` descreve os
+contratos para outros ambientes. O destino atual é o banco dedicado `tcc_experimento`.
 
 Com hooks reais instalados, backup validado e destino conferido, a forma de execução é:
 

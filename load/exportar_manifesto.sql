@@ -6,7 +6,7 @@ COPY (
         SELECT id, nome
         FROM empresa
         WHERE starts_with(nome, 'TCC-' || :'lote' || ' Empresa ')
-    ), contagens AS (
+    ), contagens AS MATERIALIZED (
         SELECT e.id, e.nome,
                (SELECT count(*) FROM cliente c WHERE c.tenant_id = e.id) AS clientes,
                (SELECT count(*) FROM pedido p WHERE p.tenant_id = e.id) AS pedidos,

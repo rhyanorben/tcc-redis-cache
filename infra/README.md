@@ -4,7 +4,7 @@ Os bancos já foram implantados; consulte o [registro](DEPLOYMENT.md). Os comand
 
 ## Preparação
 
-Cada serviço pertence à sua VM: PostgreSQL em `10.10.10.20` e Redis em `10.10.10.30`. Confirme IP, portas e Docker com `ip -br addr`, `ss -ltn`, `docker --version` e `docker compose version`. A rede `10.10.10.0/24` deve funcionar; a rede física de carga fica para depois.
+Cada serviço pertence à sua VM: PostgreSQL em `10.10.10.20` e Redis em `10.10.10.30`. Confirme IP, portas e Docker com `ip -br addr`, `ss -ltn`, `docker --version` e `docker compose version`. A rede `10.10.10.0/24` deve funcionar; a [Ethernet experimental](network/ETHERNET.md) foi configurada em 21/10, com GET HTTP validado a partir da tcc-load.
 
 Copie a pasta correspondente ou faça um checkout do projeto. Na raiz do repositório da **tcc-postgres**, para uma instalação nova:
 
@@ -71,7 +71,7 @@ A última chamada deve retornar `NOAUTH`. O healthcheck PostgreSQL verifica disp
 | Redis | Sem RDB/AOF ou volume; reinício deixa cache frio; `maxmemory=1gb` (1 GiB), `allkeys-lru` |
 | Imagens | Digests fixados nos `.env.example`; versões em [VERSIONS.md](../VERSIONS.md) |
 
-`POSTGRES_DB`, `POSTGRES_USER` e a senha inicial só atuam em volume vazio. Alterar os arquivos não muda credenciais existentes; não apague volumes para corrigir configuração nem troque a versão principal sem migração planejada. `tcc_admin` é administrativo; a API usa [roles separadas](app/README.md). A [ACL Redis da API](../docs/CACHE.md) está preparada, ainda não aplicada. O provisionamento de monitoramento SQL fica separado das roles de negócio; a role de coleta não modifica tabelas da aplicação. Confira o [registro de 16/10/2026](DEPLOYMENT.md) antes de executar qualquer configuração novamente.
+`POSTGRES_DB`, `POSTGRES_USER` e a senha inicial só atuam em volume vazio. Alterar os arquivos não muda credenciais existentes; não apague volumes para corrigir configuração nem troque a versão principal sem migração planejada. `tcc_admin` é administrativo; a API usa [roles separadas](app/README.md). A [ACL Redis da API](../docs/CACHE.md) foi aplicada e validada em 20/10. O provisionamento de monitoramento SQL fica separado das roles de negócio; a role de coleta não modifica tabelas da aplicação. Confira o [registro de 16/10/2026](DEPLOYMENT.md) antes de executar qualquer configuração novamente.
 
 Não há TLS nem limites de CPU/RAM nos contêineres. Use apenas a rede experimental confiável. As VMs de aplicação/PostgreSQL possuem 2 vCPU e 4 GiB cada, e a VM Redis possui 1 vCPU e 2 GiB, conforme verificação de 16/10/2026; reconfirme e registre antes da campanha. O processo Redis pode consumir mais memória que `maxmemory`. Remoção de volumes/dados, inclusive `down -v`, exige confirmação.
 

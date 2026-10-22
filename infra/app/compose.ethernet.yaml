@@ -1,0 +1,4 @@
+services:
+  app:
+    ports:
+      - "${APP_EXPERIMENT_BIND_IP:-10.20.20.10}:8080:8080"

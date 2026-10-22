@@ -1,6 +1,6 @@
 # Cache das páginas de pedidos
 
-Cache-aside opcional das páginas de pedidos, implementado com Spring Data Redis/Lettuce. O JSON interno guarda conteúdo e total; não depende de DTOs HTTP. A leitura reconstrói `Page<PedidoResumo>` com a paginação solicitada. Está desligado por padrão e ainda não foi implantado nas VMs.
+Cache-aside opcional das páginas de pedidos, implementado com Spring Data Redis/Lettuce. O JSON interno guarda conteúdo e total; não depende de DTOs HTTP. A leitura reconstrói `Page<PedidoResumo>` com a paginação solicitada. Permanece desligado por padrão no projeto; na implantação validada em 20/10/2026 está habilitado.
 
 | Configuração | Leitura |
 | --- | --- |
@@ -45,7 +45,7 @@ Redis não participa de `/actuator/health` na porta administrativa local; a API 
 
 `ObjectUtils.isNotEmpty` rejeita uma senha nula ou vazia, mas considera uma senha formada só por espaços como não vazia. Na campanha, mantenha TTL de 60 s, timeout de 200 ms, Redis com `maxmemory=1gb` (1 GiB) e `allkeys-lru`, sem persistência. O piloto deve conferir capacidade e efeitos de expiração/expulsão sem alterar parâmetros entre modos ou repetições.
 
-## Configuração Docker preparada
+## Configuração Docker
 
 O Compose base continua sem credencial Redis da aplicação. As sobreposições adicionam:
 
@@ -53,10 +53,27 @@ O Compose base continua sem credencial Redis da aplicação. As sobreposições 
 | --- | --- |
 | `infra/redis/compose.app-user.yaml` | Secret `redis_app_password` e usuário restrito `app` |
 | `infra/app/compose.cache.yaml` | Cache habilitado e secret montado como `REDIS_PASSWORD` |
+| `infra/app/compose.ethernet.yaml` | Publicação adicional em `10.20.20.10:8080`; não altera o modo de cache |
 
 O script Redis preserva o usuário administrativo `default`. O usuário `app` usa hash SHA-256, chaves `~tcc:*` e permissões `+@connection +get +set +eval +evalsha`. A ACL limita o prefixo da aplicação; não separa usuários finais por empresa.
 
-Na implantação autorizada, guarde a mesma senha nova em `secrets/redis_app_password.txt` nas pastas Redis e app. Ela deve ter ao menos 32 caracteres, diferir da administrativa e ser legível pelo usuário do contêiner, com diretório local 700. Não coloque senhas em `.env`, YAML ou Git. Primeiro valide a API sem cache; habilitar as sobreposições com `up` recria serviços e altera a ACL.
+A mesma senha fica em `secrets/redis_app_password.txt` nas pastas Redis e app, sem constar em `.env`, YAML ou Git. Deve ter ao menos 32 caracteres e diferir da administrativa. Na VM Redis, o arquivo tem modo 600; na tcc-app, modo 640, proprietário operador e grupo numérico 10001, usado pelo contêiner. Os diretórios locais têm modo 700. Primeiro valide a API sem cache; habilitar as sobreposições com `up` recria serviços e altera a ACL.
+
+Na implantação de 20/10, o Redis foi recriado após confirmar que não havia chaves. O usuário `app` autenticou e suas restrições de prefixo e comandos foram verificadas sem executar operações destrutivas. O ambiente usa `CACHE_NAMESPACE=tcc:vm-validacao-20261020`, TTL de 60 s e timeout de 200 ms; foi observado prazo restante de 59.880 ms numa página recém-gravada. Acerto, falta, invalidação após mudança real e preservação do cache ao repetir o status foram confirmados.
+
+Na VM Redis, mantenha os dois arquivos Compose ao administrar o serviço, preservando a ACL da aplicação:
+
+```sh
+cd ~/tcc-infra/infra/redis
+sudo docker compose -f compose.yaml -f compose.app-user.yaml ps
+```
+
+Na tcc-app, preserve os três arquivos para manter cache e [publicação Ethernet](../infra/network/ETHERNET.md), validada por GET a partir da tcc-load em 21/10:
+
+```sh
+cd ~/tcc-app/infra/app
+sudo docker compose -f compose.yaml -f compose.cache.yaml -f compose.ethernet.yaml ps
+```
 
 Na raiz do repositório, valide apenas a configuração:
 
@@ -65,7 +82,8 @@ docker compose --env-file infra/redis/.env.example \
   -f infra/redis/compose.yaml -f infra/redis/compose.app-user.yaml config --quiet
 
 docker compose --env-file infra/app/.env.example \
-  -f infra/app/compose.yaml -f infra/app/compose.cache.yaml config --quiet
+  -f infra/app/compose.yaml -f infra/app/compose.cache.yaml \
+  -f infra/app/compose.ethernet.yaml config --quiet
 ```
 
 ## Métricas e testes

@@ -89,11 +89,12 @@ O exemplo gera um arquivo SQL novo, sem conexão com o banco: 100.000 pedidos e 
 
 Após revisão e confirmação, aplique o arquivo como `tcc_migrator`, proprietário das tabelas, com `psql -X -v ON_ERROR_STOP=1 -f ARQUIVO`. O SQL inclui `ANALYZE` e retorna os IDs das empresas; não presuma IDs iniciando em 1. A carga valida contagens por empresa, quantidade de itens e totais de cada pedido antes do commit. Lotes existentes são recusados sem apagar dados; execuções do mesmo lote são serializadas no banco, evitando a duplicação concorrente desse lote. Aumente o volume gradualmente conforme o espaço disponível.
 
-## Próximas etapas
+## Implantação e próximas etapas
 
-1. Implantar e validar a API, os usuários e as migrações em uma base experimental isolada.
-2. Carregar e conferir a base, revisar planos SQL e preparar backup/restauração.
-3. Configurar a VM de carga no segundo computador e validar os coletores.
-4. Executar o piloto e depois a campanha conforme [EXPERIMENTO.md](EXPERIMENTO.md).
+API, usuários de negócio, migração V1 e cache foram implantados e validados nas VMs em 20/10/2026. A validação criou duas empresas, dois clientes, seis pedidos e 18 itens; não é a base experimental. A API está em `10.10.10.10:8080` e, desde 21/10, em `10.20.20.10:8080`, com GET confirmado a partir da tcc-load pela [Ethernet experimental](../infra/network/ETHERNET.md). O gerenciamento permanece somente em `127.0.0.1:8081` da tcc-app. Veja [VALIDACAO.md](VALIDACAO.md).
 
-O protocolo fixa paginação, 25 empresas ativas, localidade, escritas efetivas, TTL, pareamento e coleta. Os arquivos preparados não representam validação remota desses procedimentos.
+1. Conferir recursos da tcc-load, validar os coletores e alinhar a [versão do k6](../VERSIONS.md) antes do piloto.
+2. Carregar e conferir a base gradualmente, revisar planos SQL e preparar backup/restauração da base experimental.
+3. Integrar os hooks de restauração e limpeza; executar o piloto e depois a campanha conforme [EXPERIMENTO.md](EXPERIMENTO.md).
+
+O protocolo fixa paginação, 25 empresas ativas, localidade, escritas efetivas, TTL, pareamento e coleta. A validação funcional não substitui o piloto nem comprova desempenho.

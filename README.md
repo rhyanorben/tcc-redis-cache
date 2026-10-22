@@ -5,18 +5,19 @@ Experimento de Engenharia de Computação que compara a mesma aplicação com Po
 ## Estado atual
 
 - API implementada com empresa, cliente, pedido e item_pedido.
-- Cache opcional, desligado por padrão; 41 testes Java aprovados em 17/10/2026. Em 20/10, 53 testes Python, a suíte Node e o teste local do script k6 foram aprovados.
-- PostgreSQL e Redis implantados; em 16/10/2026 foram preparados monitoramento SQL e Redis com limite de 1 GiB.
-- API, migrações, usuários da aplicação e ACL Redis pendentes de implantação.
-- Gerador de dados, carga k6, planejamento pareado, coleta e consolidação preparados; piloto e campanha pendentes.
+- API implantada em 20/10/2026, com migração V1, usuários separados e ACL Redis da aplicação.
+- Validação funcional nas VMs aprovada nos modos sem cache e com cache; atualmente o cache está habilitado, com TTL de 60 s e limite Redis de 1 GiB.
+- Testes locais: 41 Java aprovados em 17/10; 53 Python, suíte Node e teste do script k6 aprovados em 20/10. Não são resultados de desempenho.
+- Ethernet do computador 1 e segunda NIC da tcc-app configuradas em 21/10; comunicação e GET HTTP a partir da tcc-load confirmados.
+- Base completa de 8.500.100 registros carregada em `tcc_experimento`; backup restaurado e conferido. Automação com autenticação manual e piloto 90/10 com 25 usuários validados; veja o [registro da preparação e do piloto](docs/PREPARACAO_E_PILOTO.md).
 
 | VM | IP | Função |
 | --- | --- | --- |
-| tcc-app | 10.10.10.10 | API; possui apenas os clientes PostgreSQL/Redis instalados |
+| tcc-app | 10.10.10.10 e 10.20.20.10 | API em Docker, porta 8080; gerenciamento local na porta 8081 |
 | tcc-postgres | 10.10.10.20 | PostgreSQL |
 | tcc-redis | 10.10.10.30 | Redis |
 
-O [registro das VMs](infra/DEPLOYMENT.md) separa as intervenções de 15 e 16/10/2026 da consulta após reinício em 17/10, quando as três VMs estavam desligadas. A API e a campanha não foram executadas nas VMs. Os modelos de restauração e limpeza dependem de configuração e autorização para o ambiente experimental dedicado.
+O [registro das VMs](infra/DEPLOYMENT.md) preserva o histórico e descreve a implantação de 20/10. O banco `tcc` preserva os dados da validação funcional anterior. A API experimental usa `tcc_experimento`, selecionado por uma sobreposição Compose. Backups, restauração, seleção do modo e coleta são coordenados pelos [hooks das VMs](infra/experiment/README.md). A campanha completa ainda não foi executada.
 
 ## Desenvolvimento
 
@@ -38,10 +39,12 @@ Os testes usam PostgreSQL e Redis descartáveis locais, sem acessar as VMs. Não
 | Migrações | [database/README.md](database/README.md) |
 | PostgreSQL, Redis e rede | [infra/README.md](infra/README.md) |
 | Implantação da API | [infra/app/README.md](infra/app/README.md) |
+| Ethernet, validação e reversão | [infra/network/ETHERNET.md](infra/network/ETHERNET.md) |
 | Protocolo, limites e campanha | [docs/EXPERIMENTO.md](docs/EXPERIMENTO.md) |
 | Validações e pendências | [docs/VALIDACAO.md](docs/VALIDACAO.md) |
 | Trocas exatas no texto do TCC | [docs/AJUSTES_TEXTO_TCC.md](docs/AJUSTES_TEXTO_TCC.md) |
 | Carga e execução | [load/README.md](load/README.md) |
+| Base completa, disco, backups e piloto | [docs/PREPARACAO_E_PILOTO.md](docs/PREPARACAO_E_PILOTO.md) |
 | Versões | [VERSIONS.md](VERSIONS.md) |
 
-`scripts/` gera SQL sem acessar o banco. `load/` prepara manifestos, plano, carga e consolidação; `monitoring/` coleta recursos e contadores. `results/` guarda resultados locais ignorados pelo Git. A comparação definitiva compreende 200 execuções; não há resultados de desempenho ainda.
+`scripts/` reúne o gerador SQL, sem conexão ao banco, e a validação HTTP da implantação. `load/` prepara manifestos, plano, carga e consolidação; `monitoring/` coleta recursos e contadores. `results/` guarda resultados locais ignorados pelo Git. A comparação definitiva compreende 200 execuções. O piloto valida o procedimento e não substitui essa campanha.

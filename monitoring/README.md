@@ -1,6 +1,6 @@
 # Monitoramento experimental
 
-Os scripts coletam e resumem dados de cada execução. Sua validação automatizada usa dados sintéticos; não existem resultados de desempenho da campanha. A API, a base completa e as integrações de preparação ainda precisam ser implantadas e verificadas no ambiente experimental.
+Os scripts coletam e resumem dados de cada execução. A validação automatizada usa dados sintéticos; os [hooks das VMs](../infra/experiment/README.md) também foram conferidos com serviços reais. A base completa e o monitoramento do piloto estão registrados em [PREPARACAO_E_PILOTO.md](../docs/PREPARACAO_E_PILOTO.md). A campanha completa permanece pendente.
 
 ## Preparação
 
@@ -19,6 +19,8 @@ O resultado deve ser `yes`; confira também o desvio informado pelo serviço de 
 | Aplicação | Docker e `http://127.0.0.1:8081/actuator/metrics`; a porta administrativa permanece publicada somente no loopback da VM |
 | PostgreSQL | Docker e `pg_stat_statements`, filtrado pelo usuário `tcc_app`; conexão local no contêiner com a role restrita `tcc_monitor` |
 | Redis | Docker e `INFO all`; a credencial administrativa é lida do secret dentro do contêiner e não é gravada na saída |
+
+A opção `--database` seleciona o banco das estatísticas; seu padrão continua `tcc`. No experimento isolado, informe `tcc_experimento`.
 
 O provisionamento PostgreSQL está em `infra/postgres/provision-monitoring.sql`. A role de monitoramento possui acesso às estatísticas e padrão de transação somente leitura; não recebe leitura ou escrita nas tabelas de negócio. A autenticação local usada pelo coletor ocorre dentro do contêiner e depende da configuração local de `pg_hba.conf`.
 
@@ -43,7 +45,7 @@ Na `tcc-postgres`:
 ```sh
 mkdir -p results/ensaio-001/monitoring
 sudo python3 monitoring/coletar.py --service postgres \
-  --compose infra/postgres/compose.yaml \
+  --compose infra/postgres/compose.yaml --database tcc_experimento \
   --output results/ensaio-001/monitoring/postgres.jsonl \
   --duration 360 --interval 5
 ```
