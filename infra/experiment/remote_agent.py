@@ -11,7 +11,7 @@ import subprocess
 import sys
 import time
 import urllib.request
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 
@@ -80,20 +80,59 @@ class Agent:
             result.update(cache_mode='on' if environment.get('CACHE_ENABLED') == 'true' else 'off', database_url=environment.get('DB_URL'))
         return result
 
+    def preflight(self):
+        filesystem = os.statvfs('/')
+        result = {'status': self.status(), 'ntp_synchronized': execute(['timedatectl', 'show', '-p', 'NTPSynchronized', '--value']).strip() == 'yes',
+                  'free_bytes': filesystem.f_bavail * filesystem.f_frsize, 'filesystem_bytes': filesystem.f_blocks * filesystem.f_frsize,
+                  'timestamp_unix': time.time(), 'cpus': os.cpu_count(),
+                  'memory_total_kib': int(Path('/proc/meminfo').read_text().splitlines()[0].split()[1])}
+        if self.role == 'app':
+            full = json.loads(execute(self.compose_command(self.app_files('on')) + ['config', '--format', 'json']))
+            environment = full['services']['app']['environment']
+            result['parameters'] = {name: str(environment.get(name)) for name in ('DB_POOL_SIZE', 'CACHE_TTL', 'CACHE_TIMEOUT', 'CACHE_NAMESPACE', 'REDIS_HOST', 'REDIS_PORT')}
+            with urllib.request.urlopen('http://127.0.0.1:8081/actuator/health', timeout=5) as response:
+                result['health'] = json.load(response)['status']
+            for host, port in (('10.10.10.20', 5432), ('10.10.10.30', 6379)):
+                with socket.create_connection((host, port), timeout=5):
+                    pass
+        if self.role == 'postgres':
+            self.database_guard()
+            if digest(Path(self.config['backup'])) != self.config['backup_sha256']:
+                raise ValueError('Backup da VM PostgreSQL divergente')
+            result['counts'] = self.counts()
+        if self.role == 'redis':
+            values = self.redis_command('CONFIG GET maxmemory maxmemory-policy save appendonly').split('\n')
+            if len(values) % 2:
+                values.append('')
+            result['parameters'] = dict(zip(values[::2], values[1::2]))
+        if self.role == 'postgres':
+            result['parameters'] = self.sql("SELECT json_build_object('shared_buffers',current_setting('shared_buffers'),'work_mem',current_setting('work_mem'),'max_connections',current_setting('max_connections'),'parallel_workers',current_setting('max_parallel_workers_per_gather'),'indexes',(SELECT json_agg(indexdef ORDER BY indexname) FROM pg_indexes WHERE schemaname='tcc'))")
+        return result
+
     def stop(self):
         if self.role != 'app':
             raise ValueError('Somente a aplicação pode ser parada')
         execute(self.compose_command() + ['stop', '--timeout', '30', 'app'])
         return {'stopped': True}
 
+    def app_files(self, mode):
+        files = ['compose.ethernet.yaml', 'compose.experiment.yaml']
+        if self.config.get('revision_compose'):
+            files.append(self.config['revision_compose'])
+        if mode == 'on':
+            files.append('compose.cache.yaml')
+        return files
+
     def mode(self, mode):
         if self.role != 'app' or mode not in ('on', 'off'):
             raise ValueError('Modo inválido')
-        files = ['compose.ethernet.yaml', 'compose.experiment.yaml']
-        if mode == 'on':
-            files.append('compose.cache.yaml')
-        image = execute(['docker', 'image', 'inspect', 'tcc-pedidos:0.1.0', '--format', '{{.Id}}']).strip()
-        if image != IMAGE:
+        files = self.app_files(mode)
+        expected_image = self.config.get('image', IMAGE)
+        image_tag = self.config.get('image_tag', 'tcc-pedidos:0.1.0')
+        if not re.fullmatch(r'sha256:[a-f0-9]{64}', expected_image):
+            raise ValueError('Imagem de referência inválida')
+        image = execute(['docker', 'image', 'inspect', image_tag, '--format', '{{.Id}}']).strip()
+        if image != expected_image:
             raise ValueError('A imagem da aplicação foi alterada')
         execute(self.compose_command(files) + ['up', '-d', '--no-build', 'app'])
         for attempt in range(60):
@@ -106,7 +145,7 @@ class Agent:
         else:
             raise RuntimeError('API não ficou pronta')
         status = self.status()
-        if status['image'] != IMAGE or status['cache_mode'] != mode or '/tcc_experimento?' not in status['database_url']:
+        if status['image'] != expected_image or status['cache_mode'] != mode or '/tcc_experimento?' not in status['database_url']:
             raise ValueError('Configuração efetiva da API divergente')
         return status
 
@@ -120,6 +159,7 @@ class Agent:
             raise ValueError('Aplicação ainda conectada; restauração recusada')
         if os.statvfs('/').f_bavail * os.statvfs('/').f_frsize < 5 * 1024**3:
             raise ValueError('Espaço insuficiente para restauração segura')
+        statistics_since = datetime.now(timezone.utc).isoformat()
         with backup.open('rb') as source:
             result = subprocess.run(self.compose_command() + ['exec', '-T', 'postgres', 'pg_restore', '-U', 'tcc_admin',
                                     '-d', DATABASE, '--clean', '--if-exists', '--exit-on-error', '--single-transaction'],
@@ -127,6 +167,7 @@ class Agent:
         if result.returncode:
             sys.stderr.buffer.write(result.stderr)
             raise RuntimeError('Restauração falhou')
+        (self.root / 'statistics-since.json').write_text(json.dumps({'timestamp': statistics_since}))
         self.sql('ANALYZE tcc.empresa; ANALYZE tcc.cliente; ANALYZE tcc.pedido; ANALYZE tcc.item_pedido;')
         return {'backup_sha256': expected_hash, 'counts': self.counts()}
 
@@ -169,6 +210,10 @@ class Agent:
         output = directory / 'samples.jsonl'
         command = [sys.executable, self.config['collector'], '--service', self.role, '--compose', str(self.compose),
                    '--database', DATABASE, '--output', str(output), '--duration', '3600', '--interval', '5']
+        if self.role == 'postgres':
+            cutoff = self.root / 'statistics-since.json'
+            if cutoff.exists():
+                command += ['--statements-since', json.loads(cutoff.read_text())['timestamp']]
         with (directory / 'collector.log').open('wb') as log:
             process = subprocess.Popen(command, stdout=log, stderr=log, start_new_session=True)
         state = {'pid': process.pid, 'start_ticks': Path(f'/proc/{process.pid}/stat').read_text().split()[21]}
@@ -189,10 +234,33 @@ class Agent:
     def stop_collector(self, directory):
         state = json.loads((directory / 'process.json').read_text())
         process = Path(f'/proc/{state["pid"]}')
-        if process.exists() and (process / 'stat').read_text().split()[21] == state['start_ticks']:
-            if self.config['collector'].encode() not in (process / 'cmdline').read_bytes():
-                raise RuntimeError('PID não pertence ao coletor')
+
+        def collector_active():
+            try:
+                fields = (process / 'stat').read_text().rsplit(')', 1)[1].split()
+            except FileNotFoundError:
+                return False
+            return fields[19] == state['start_ticks'] and fields[0] != 'Z'
+
+        if not collector_active():
+            return
+        try:
+            command = (process / 'cmdline').read_bytes()
+        except FileNotFoundError:
+            return
+        if self.config['collector'].encode() not in command:
+            raise RuntimeError('PID não pertence ao coletor')
+        if not collector_active():
+            return
+        try:
             os.kill(state['pid'], signal.SIGTERM)
+        except ProcessLookupError:
+            return
+        deadline = time.monotonic() + 10
+        while collector_active():
+            if time.monotonic() >= deadline:
+                raise RuntimeError(f'Coletor PID {state["pid"]} não encerrou após 10 segundos')
+            time.sleep(0.1)
 
     def monitor_stop(self, run_id, completed_ms):
         directory = self.run_directory(run_id)
@@ -221,12 +289,12 @@ class Agent:
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('action', choices=('status', 'stop', 'mode', 'restore', 'verify', 'clear', 'monitor-start', 'monitor-stop'))
+    parser.add_argument('action', choices=('preflight', 'status', 'stop', 'mode', 'restore', 'verify', 'clear', 'monitor-start', 'monitor-stop'))
     parser.add_argument('value', nargs='?')
     parser.add_argument('completed_ms', nargs='?', type=int, default=0)
     arguments = parser.parse_args()
     agent = Agent(json.loads(Path('/etc/tcc-experiment.json').read_text()))
-    actions = {'status': lambda: agent.status(), 'stop': lambda: agent.stop(), 'mode': lambda: agent.mode(arguments.value),
+    actions = {'preflight': lambda: agent.preflight(), 'status': lambda: agent.status(), 'stop': lambda: agent.stop(), 'mode': lambda: agent.mode(arguments.value),
                'restore': lambda: agent.restore(arguments.value), 'verify': lambda: agent.verify(), 'clear': lambda: agent.clear(),
                'monitor-start': lambda: agent.monitor_start(arguments.value),
                'monitor-stop': lambda: agent.monitor_stop(arguments.value, arguments.completed_ms)}

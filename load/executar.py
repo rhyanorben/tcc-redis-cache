@@ -10,6 +10,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 
 from planejar import K6_IMAGE, PROFILES, VIRTUAL_USERS
+from outcomes import validate_outcomes
 
 HOOKS = ('restore', 'mode', 'clear', 'verify', 'monitor-start', 'monitor-stop')
 SERVICES = ('app', 'postgres', 'redis')
@@ -73,11 +74,18 @@ def validate_hooks(directory):
 
 
 def run_hook(directory, name, environment, expected):
-    receipt_path = Path(environment['RUN_DIR']) / f'hook-{name}.json'
-    log_path = Path(environment['RUN_DIR']) / f'hook-{name}.stderr.log'
+    label = f'{name}-cleanup' if environment.get('MONITOR_MODE') == 'cleanup' else name
+    receipt_path = Path(environment['RUN_DIR']) / f'hook-{label}.json'
+    log_path = Path(environment['RUN_DIR']) / f'hook-{label}.stderr.log'
     with log_path.open('w', encoding='utf-8') as error_log:
-        result = subprocess.run([str((directory / name).resolve())], env=environment, text=True,
-                                stdout=subprocess.PIPE, stderr=error_log, check=True)
+        try:
+            result = subprocess.run([str((directory / name).resolve())], env=environment, text=True,
+                                    stdout=subprocess.PIPE, stderr=error_log, check=True)
+        except subprocess.CalledProcessError as error:
+            error_log.flush()
+            details = log_excerpt(log_path)[-1:]
+            reason = f' {details[0]}' if details else ''
+            raise ValueError(f'Hook {label} falhou (código {error.returncode}).{reason} Consulte {log_path}.') from error
     receipt = json.loads(result.stdout)
     if receipt.get('hook') != name or receipt.get('completed') is not True:
         raise ValueError(f'Hook {name} não confirmou conclusão.')
@@ -85,6 +93,40 @@ def run_hook(directory, name, environment, expected):
         if receipt.get(key) != value:
             raise ValueError(f'Hook {name}: confirmação divergente para {key}.')
     receipt_path.write_text(json.dumps(receipt, indent=2) + '\n', encoding='utf-8')
+
+
+def log_excerpt(path):
+    if not path.is_file():
+        return []
+    with path.open('rb') as source:
+        source.seek(max(0, path.stat().st_size - 65536))
+        lines = source.read().decode('utf-8', errors='replace').splitlines()
+    selected = [line.strip() for line in lines if line.strip()]
+    errors = [line for line in selected if re.search(r'level[=:]["\s]*(error|fatal)|abort|panic|Error:', line, re.IGNORECASE)]
+    return [line[:600] for line in (errors or selected)[-4:]]
+
+
+def k6_failure(run_directory, phase, error):
+    log_path = run_directory / f'k6-{phase}.log'
+    summary_name = 'warmup-summary.json' if phase == 'warmup' else 'measurement-summary.json'
+    summary_path = run_directory / summary_name
+    details = log_excerpt(log_path)
+    diagnostic = {'phase': phase, 'exit_code': getattr(error, 'returncode', None),
+                  'error_type': type(error).__name__, 'log': log_path.name,
+                  'summary': summary_name, 'log_excerpt': details}
+    if summary_path.is_file():
+        try:
+            summary = json.loads(summary_path.read_text(encoding='utf-8'))
+            diagnostic['summary_data'] = {key: summary[key] for key in (
+                'valid', 'valid_for_campaign', 'read_errors', 'write_errors', 'response_contract_errors',
+                'measurement_start_unix_ms', 'measurement_end_unix_ms', 'measurement_completed_unix_ms',
+            ) if key in summary}
+        except (ValueError, OSError) as summary_error:
+            diagnostic['summary_error'] = str(summary_error)
+    (run_directory / f'k6-{phase}-error.json').write_text(json.dumps(diagnostic, indent=2) + '\n', encoding='utf-8')
+    status = f' (código {error.returncode})' if hasattr(error, 'returncode') else ''
+    reason = f' {details[-1]}' if details else ''
+    return ValueError(f'k6 {phase} interrompido{status}.{reason} Consulte {log_path} e {summary_path}.')
 
 
 def run_k6(root, run_directory, manifest_path, phase, environment):
@@ -96,6 +138,7 @@ def run_k6(root, run_directory, manifest_path, phase, environment):
         '--mount', f'type=bind,source={root},target=/scripts,readonly',
         '--mount', f'type=bind,source={manifest_path},target=/data/manifesto.json,readonly',
         '--mount', f'type=bind,source={run_directory},target=/results',
+        '--name', 'tcc-k6-' + hashlib.sha256(str(run_directory).encode()).hexdigest()[:12] + '-' + phase,
         K6_IMAGE, 'run', '--quiet',
     ]
     values = {
@@ -108,8 +151,25 @@ def run_k6(root, run_directory, manifest_path, phase, environment):
     for key, value in values.items():
         command.extend(['-e', f'{key}={value}'])
     command.append('/scripts/experiment.js')
-    with (run_directory / f'k6-{phase}.log').open('w', encoding='utf-8') as log:
-        subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+    failure = None
+    try:
+        with (run_directory / f'k6-{phase}.log').open('w', encoding='utf-8') as log:
+            try:
+                subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True)
+            except (OSError, subprocess.SubprocessError) as error:
+                log.flush()
+                failure = k6_failure(run_directory, phase, error)
+                raise failure from error
+    finally:
+        name = 'tcc-k6-' + hashlib.sha256(str(run_directory).encode()).hexdigest()[:12] + '-' + phase
+        try:
+            subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=20)
+        except (OSError, subprocess.SubprocessError) as cleanup_error:
+            path = run_directory / f'k6-{phase}-cleanup-error.json'
+            path.write_text(json.dumps({'error': str(cleanup_error), 'container': name}) + '\n', encoding='utf-8')
+            if failure is None:
+                raise ValueError(f'Não foi possível confirmar a limpeza do contêiner k6. Consulte {path}.') from cleanup_error
+            print(f'Limpeza do contêiner k6 não confirmada. Consulte {path}.', file=sys.stderr)
     summary = json.loads((run_directory / summary_name).read_text(encoding='utf-8'))
     if summary.get('valid') is not True or summary.get('phase') != phase:
         raise ValueError(f'Resumo k6 inválido em {phase}.')
@@ -117,6 +177,8 @@ def run_k6(root, run_directory, manifest_path, phase, environment):
         raise ValueError('A medição não registrou requisições.')
     if phase == 'measurement' and summary.get('valid_for_campaign') is not True:
         raise ValueError('Smoke ou medição incompleta não podem compor a campanha.')
+    if phase == 'measurement':
+        validate_outcomes(summary)
     return summary
 
 
@@ -146,6 +208,7 @@ def execute_run(plan, run, arguments, manifest_path, backup_hash):
         'MANIFEST_PATH': str(manifest_path), 'MANIFEST_SHA256': plan['manifest_sha256'],
         'BACKUP_PATH': str(arguments.backup.resolve()), 'BACKUP_SHA256': backup_hash,
         'MEASUREMENT_SUMMARY': str(run_directory / 'measurement-summary.json'),
+        'MONITOR_MODE': 'summary',
     })
     monitoring = False
     try:
@@ -172,9 +235,12 @@ def execute_run(plan, run, arguments, manifest_path, backup_hash):
     finally:
         if monitoring:
             try:
-                run_hook(arguments.hooks, 'monitor-stop', environment, {'monitoring_stopped': True})
-            except (ValueError, OSError, subprocess.SubprocessError):
-                print(f'Falha ao encerrar monitoramento em {run_directory}; verifique os processos.', file=sys.stderr)
+                cleanup_environment = {**environment, 'MONITOR_MODE': 'cleanup'}
+                run_hook(arguments.hooks, 'monitor-stop', cleanup_environment, {'monitoring_stopped': True})
+            except Exception as cleanup_error:
+                path = run_directory / 'monitor-cleanup-error.json'
+                path.write_text(json.dumps({'error': str(cleanup_error)}) + '\n', encoding='utf-8')
+                print(f'Parada dos coletores não confirmada; consulte {path}.', file=sys.stderr)
 
 
 def main():

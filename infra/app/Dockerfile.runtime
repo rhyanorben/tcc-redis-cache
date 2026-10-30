@@ -1,0 +1,3 @@
+FROM tcc-pedidos:0.1.0
+COPY pedidos.jar /app/app.jar
+LABEL tcc.protocol.version="2"

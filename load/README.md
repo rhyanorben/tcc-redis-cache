@@ -1,5 +1,7 @@
 # Carga experimental
 
+Para a campanha preparada nas VMs, use o [guia de execução em blocos](../docs/CAMPANHA_EM_BLOCOS.md).
+
 Execute os comandos a partir da raiz do repositório. Python 3 e Node.js bastam para validar
 e preparar arquivos. A execução real usa Docker com k6 **1.6.0**, fixado também por digest
 em `planejar.py`. Não há resultados de campanha neste diretório.

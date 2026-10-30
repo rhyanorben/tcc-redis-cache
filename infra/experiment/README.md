@@ -1,5 +1,7 @@
 # Execução nas VMs do TCC
 
+Para a campanha atual, use o [guia dos 20 blocos](../../docs/CAMPANHA_EM_BLOCOS.md). O comando do bloco já abre e encerra as sessões manuais; não inicie outro controlador em paralelo. Os comandos individuais abaixo servem para administração isolada.
+
 A preparação de 22/10/2026 usa `tcc_experimento` na VM PostgreSQL. O banco `tcc` anterior permanece separado, com seus registros de validação. A API mantém a mesma imagem; `infra/app/compose.experiment.yaml` seleciona o banco experimental e as sobreposições Ethernet/cache preservam a rede e o modo escolhidos.
 
 ## Dados, índices e backup

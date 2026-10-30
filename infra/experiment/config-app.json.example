@@ -6,5 +6,8 @@
   "collector": "/opt/tcc-experiment/coletar.py",
   "export_sql": "/opt/tcc-experiment/exportar_manifesto.sql",
   "backup": "/home/rhyan/tcc-experimento/backups/base-v1.dump",
-  "backup_sha256": "84af910f36b945af6080fc8bb8df2a39835dfa388cd81689ab40483a64baa58f"
+  "backup_sha256": "84af910f36b945af6080fc8bb8df2a39835dfa388cd81689ab40483a64baa58f",
+  "image": "sha256:70865bd0ecd794ff423ea6a709090d853359016743b64111a7caaf7ea4fb9d9d",
+  "image_tag": "tcc-pedidos:campanha-v2",
+  "revision_compose": "compose.revision.yaml"
 }

@@ -1,5 +1,7 @@
 # Preparação e piloto — 22/10/2026
 
+Registro histórico do piloto. A execução preparada em 23/10 e o orçamento refinado de disco estão no [guia da campanha em blocos](CAMPANHA_EM_BLOCOS.md).
+
 A base completa e a restauração foram validadas no banco dedicado `tcc_experimento`. A API usa a mesma imagem nos dois modos; o banco `tcc` anterior foi preservado. A campanha de 200 execuções ainda não foi iniciada.
 
 ## Dados e espaço

@@ -9,6 +9,7 @@ import br.edu.tcc.pedidos.mapper.PedidoMapper;
 import br.edu.tcc.pedidos.model.ItemPedido;
 import br.edu.tcc.pedidos.model.Pedido;
 import br.edu.tcc.pedidos.model.PedidoResumo;
+import br.edu.tcc.pedidos.service.ControleAcessoBanco;
 import br.edu.tcc.pedidos.service.ConsultaPedidosService;
 import br.edu.tcc.pedidos.service.PedidoService;
 import jakarta.validation.Valid;
@@ -33,16 +34,19 @@ import org.springframework.web.bind.annotation.RestController;
 @Validated
 public class PedidoController {
 
+    private final ControleAcessoBanco controleAcessoBanco;
     private final PedidoService pedidoService;
     private final ConsultaPedidosService consultaPedidosService;
     private final PedidoMapper pedidoMapper;
     private final ItemPedidoMapper itemPedidoMapper;
 
     public PedidoController(
+            ControleAcessoBanco controleAcessoBanco,
             PedidoService pedidoService,
             ConsultaPedidosService consultaPedidosService,
             PedidoMapper pedidoMapper,
             ItemPedidoMapper itemPedidoMapper) {
+        this.controleAcessoBanco = controleAcessoBanco;
         this.pedidoService = pedidoService;
         this.consultaPedidosService = consultaPedidosService;
         this.pedidoMapper = pedidoMapper;
@@ -55,7 +59,8 @@ public class PedidoController {
             @RequestHeader @Positive long tenantId,
             @Valid @RequestBody NovoPedidoRequest novoPedido) {
         List<ItemPedido> itens = itemPedidoMapper.paraNovosItens(novoPedido.itens());
-        Pedido pedido = pedidoService.criarPedido(tenantId, novoPedido.clienteId(), itens);
+        Pedido pedido = controleAcessoBanco.executar(
+                () -> pedidoService.criarPedido(tenantId, novoPedido.clienteId(), itens));
         return pedidoMapper.paraResumoResponse(pedido);
     }
 
@@ -70,7 +75,8 @@ public class PedidoController {
             @RequestHeader @Positive long tenantId,
             @PathVariable("id") @Positive long pedidoId,
             @Valid @RequestBody AlterarStatusRequest alteracao) {
-        Pedido pedido = pedidoService.alterarStatus(tenantId, pedidoId, alteracao.status());
+        Pedido pedido = controleAcessoBanco.executar(
+                () -> pedidoService.alterarStatus(tenantId, pedidoId, alteracao.status()));
         return pedidoMapper.paraResumoResponse(pedido);
     }
 }

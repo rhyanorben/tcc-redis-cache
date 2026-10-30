@@ -122,3 +122,14 @@ A preparação autorizada ampliou somente o volume lógico PostgreSQL para 32 Gi
 A referência `base-v1.dump` foi restaurada em uma base temporária, com todas as contagens conferidas, e copiada para a geradora no computador 2 com o mesmo hash. Docker 29.9.1, Compose 5.6.0 e o contêiner k6 1.6.0 fixado foram preparados na tcc-load. Os agentes de preparação usam SSH/sudo autenticado manualmente em sessões temporárias, sem novas chaves permanentes ou regras sudo sem senha.
 
 Par 90/10, 25 usuários, cache desligado/ligado: duas medições completas de 300 s, sem erros, com restauração e coleta válidas O [registro da preparação](../docs/PREPARACAO_E_PILOTO.md) reúne espaço, índices, recuperação e evidências; a [operação dos hooks](experiment/README.md) descreve autenticação, repetição e reversão. A campanha completa não foi iniciada.
+
+
+## Preparação dos blocos — 23/10/2026
+
+Os agentes de pré-validação e coleta foram atualizados em `/opt/tcc-experiment`, com cópias anteriores em `antes-blocos-20261023`. A geradora recebeu os scripts e os metadados de `results/campanha-20261023`, sem execuções de carga. O notebook recebeu tmux 3.4 e o lançador dos blocos. A conferência pelo fluxo do operador validou autenticação manual, serviços, comunicação, backup, contagens, relógios e espaço; suas sessões foram encerradas. Não houve restauração, limpeza Redis ou reinício de serviços nessa preparação. Consulte o [guia dos blocos](../docs/CAMPANHA_EM_BLOCOS.md).
+
+## Revisão de capacidade — 24/10/2026
+
+Apenas a API foi recriada com `compose.revision.yaml` e `tcc-pedidos:campanha-v2`, preservando Java e parâmetros. Os agentes receberam confirmação de término dos coletores. PostgreSQL e Redis permaneceram em execução, sem restauração ou limpeza nesta intervenção. A geradora recebeu `/home/rhyan/tcc-runner-v2`; a campanha anterior e o plano foram preservados. A nova usa o mesmo plano, sementes e manifesto, sem medições iniciadas. Autenticação continua manual e temporária.
+
+As cópias anteriores estão em `/home/rhyan/tcc-experimento/backups/revisao-v2-20261024T211053Z` na API, `revisao-v2-20261024T211055Z` no PostgreSQL e `revisao-v2-20261024T211054Z` no Redis. Para reversão operacional com a carga parada, restaure `tcc-experiment.json` em `/etc/tcc-experiment.json` e `remote_agent.py`/`coletar.py` em `/opt/tcc-experiment/` a partir da cópia da respectiva VM; na API, execute `sudo python3 /opt/tcc-experiment/remote_agent.py mode on`. A configuração anterior ignora a sobreposição da revisão e seleciona a imagem original ainda preservada. Essa reversão não autoriza misturar campanhas. O registro `result.json` de cada cópia identifica as imagens anterior e nova; código e JAR testados estão versionados ou identificados em VERSIONS.md.

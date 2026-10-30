@@ -31,7 +31,7 @@ try:
         values = request.get('values', [])
         if action == 'exit':
             break
-        operations = {'status': agent.status, 'stop': agent.stop, 'mode': agent.mode, 'restore': agent.restore,
+        operations = {'preflight': agent.preflight, 'status': agent.status, 'stop': agent.stop, 'mode': agent.mode, 'restore': agent.restore,
                       'verify': agent.verify, 'clear': agent.clear, 'monitor-start': agent.monitor_start,
                       'monitor-stop': agent.monitor_stop}
         try:

@@ -2,12 +2,14 @@
 
 Experimento de Engenharia de Computação que compara a mesma aplicação com PostgreSQL e com cache-aside Redis. Uma instância atende várias empresas; a operação avaliada é a **listagem paginada de pedidos de uma empresa**.
 
+A revisão de 24/10/2026 está implantada. Comece pelo [piloto manual e pela campanha em 20 blocos](docs/CAMPANHA_EM_BLOCOS.md); os resultados anteriores permanecem separados.
+
 ## Estado atual
 
 - API implementada com empresa, cliente, pedido e item_pedido.
 - API implantada em 20/10/2026, com migração V1, usuários separados e ACL Redis da aplicação.
 - Validação funcional nas VMs aprovada nos modos sem cache e com cache; atualmente o cache está habilitado, com TTL de 60 s e limite Redis de 1 GiB.
-- Testes locais: 41 Java aprovados em 17/10; 53 Python, suíte Node e teste do script k6 aprovados em 20/10. Não são resultados de desempenho.
+- Revisão de capacidade: 50 testes Java e 116 Python aprovados, além das duas suítes JavaScript. A conferência sem carga e uma consulta pela Ethernet passaram; o piloto com 500 usuários aguarda execução manual.
 - Ethernet do computador 1 e segunda NIC da tcc-app configuradas em 21/10; comunicação e GET HTTP a partir da tcc-load confirmados.
 - Base completa de 8.500.100 registros carregada em `tcc_experimento`; backup restaurado e conferido. Automação com autenticação manual e piloto 90/10 com 25 usuários validados; veja o [registro da preparação e do piloto](docs/PREPARACAO_E_PILOTO.md).
 

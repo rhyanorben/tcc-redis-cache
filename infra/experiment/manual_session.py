@@ -91,6 +91,10 @@ class Session:
             os.close(self.fd)
 
 
+def stop_session(signum, frame):
+    raise KeyboardInterrupt
+
+
 def main():
     parser = argparse.ArgumentParser(description='Autentica sessões temporárias SSH/sudo; não guarda senhas ou cria privilégios permanentes.')
     parser.add_argument('--lifetime-seconds', type=int, default=3600)
@@ -105,6 +109,8 @@ def main():
     sessions = {}
     server = None
     try:
+        signal.signal(signal.SIGHUP, stop_session)
+        signal.signal(signal.SIGTERM, stop_session)
         for service in ('app', 'postgres', 'redis'):
             password = getpass.getpass('Senha SSH/sudo de tcc-' + service + ': ')
             sessions[service] = Session(service, password)
@@ -133,6 +139,8 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        signal.signal(signal.SIGHUP, signal.SIG_IGN)
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
         if server:
             server.server_close()
         for service in ('postgres', 'redis', 'app'):

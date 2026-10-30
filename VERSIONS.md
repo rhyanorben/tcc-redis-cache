@@ -40,3 +40,9 @@ Esse ID identifica o artefato local; não é um digest de distribuição em regi
 Recursos confirmados em 16/10/2026: aplicação e PostgreSQL com 2 vCPU/4 GiB cada; Redis com 1 vCPU/2 GiB e `maxmemory=1gb`. A tcc-load possui 4 vCPU e 4 GiB; Docker e a imagem k6 de referência foram preparados em 22/10. Os três coletores de serviço foram conferidos com dados reais. Veja [ETHERNET.md](infra/network/ETHERNET.md).
 
 Antes dos ensaios, registre commit, digests, JRE, recursos, base e índices, paginação, empresas ativas, ritmo da carga, pool, namespace, TTL e timeout. Use os mesmos artefatos nos dois cenários e siga [EXPERIMENTO.md](docs/EXPERIMENTO.md). Nenhum resultado de desempenho é estabelecido por esse registro.
+
+Em 23/10/2026, tmux 3.4 foi instalado no notebook para executar os blocos em terminal persistente. Imagens e recursos das VMs foram preservados.
+
+## Revisão de capacidade — 24/10/2026
+
+A imagem ativa `tcc-pedidos:campanha-v2` tem ID `sha256:70865bd0ecd794ff423ea6a709090d853359016743b64111a7caaf7ea4fb9d9d`. Foi construída sobre a imagem original `55f2b25ac4de19ceb22aa867ce78b17e3266a707d2ad676d42c534610831c35b`, preservando o mesmo Java. O JAR testado tem SHA-256 `e12f2194bc05f8bf969ce2ad54b991cba3b2c1ba1498746f3f6d6b178ed7dcbf`. A imagem original permanece disponível. Pool 10, espera de 5 s, timeout SQL de 10 s, recursos, base e índices foram mantidos; a admissão justa usa os mesmos limites. A nova campanha usa protocolo 2 e não incorpora resultados da anterior.

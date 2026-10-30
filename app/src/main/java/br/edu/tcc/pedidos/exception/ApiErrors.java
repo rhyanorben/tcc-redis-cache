@@ -1,6 +1,7 @@
 package br.edu.tcc.pedidos.exception;
 
 import jakarta.validation.ConstraintViolationException;
+import java.net.URI;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ProblemDetail;
@@ -16,6 +17,18 @@ public class ApiErrors {
         return ProblemDetail.forStatusAndDetail(
                 HttpStatus.BAD_REQUEST,
                 "Confira os campos, a empresa e os limites de paginação.");
+    }
+
+    @ExceptionHandler(CapacidadeBancoExcedidaException.class)
+    public ProblemDetail tratarCapacidadeBancoExcedida(CapacidadeBancoExcedidaException exception) {
+        ProblemDetail problema = ProblemDetail.forStatusAndDetail(
+                HttpStatus.SERVICE_UNAVAILABLE,
+                "A capacidade de acesso ao banco foi atingida. A operação não foi aplicada.");
+        problema.setType(URI.create("urn:tcc:problem:database-capacity"));
+        problema.setTitle("Capacidade do banco atingida");
+        problema.setProperty("code", "DATABASE_CAPACITY_EXCEEDED");
+        problema.setProperty("operationApplied", false);
+        return problema;
     }
 
     @ExceptionHandler(DataIntegrityViolationException.class)

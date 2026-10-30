@@ -62,6 +62,7 @@ class ExperimentGuardsTest(unittest.TestCase):
     def test_mode_refuses_different_image(self):
         agent = agent_module.Agent.__new__(agent_module.Agent)
         agent.role = 'app'
+        agent.config = {}
         with patch.object(agent_module, 'execute', return_value='sha256:outra') as execute:
             with self.assertRaises(ValueError):
                 agent.mode('on')

@@ -1,6 +1,6 @@
 # Trocas no texto do TCC
 
-Referência: PDF recebido em 16/10/2026. Os trechos citados servem para localizar as substituições e preservam a redação original, com espaços e quebras de linha normalizados. Copie somente o conteúdo indicado em **Por** e os quadros propostos. A numeração de páginas corresponde ao PDF original, que permanece intacto.
+Revisão operacional de 24/10/2026 incorporada no item 9 e no Quadro 2. Referência: PDF recebido em 16/10/2026. Os trechos citados servem para localizar as substituições e preservam a redação original, com espaços e quebras de linha normalizados. Copie somente o conteúdo indicado em **Por** e os quadros propostos. A numeração de páginas corresponde ao PDF original, que permanece intacto.
 
 A revisão mantém um parágrafo por substituição textual, aproveita o Quadro 1 existente e apresenta as escolhas do experimento sem detalhes de configuração. As redações descrevem o procedimento futuro, não resultados já obtidos.
 
@@ -107,7 +107,7 @@ Cada execução terá dois minutos de aquecimento somente com leituras, excluíd
 
 **Por:**
 
-As métricas e os instrumentos constam no Quadro 2, com as medidas das requisições separadas por leitura e escrita. A coleta excluirá o aquecimento, utilizará relógios sincronizados e amostrará recursos a cada cinco segundos. Os contadores serão comparados antes da medição e após a conclusão das requisições. A taxa de acerto será a razão entre acertos e a soma de acertos, faltas e desvios ao banco por falha do *cache*. Estatísticas internas do Redis serão auxiliares. Estudos de desempenho utilizam tempo de resposta e CPU para comparar configurações sob carga (Niswar *et al.*, 2024).
+As métricas do Quadro 2 separarão leituras e escritas, com tentativas, sucessos e recusas. A vazão e as latências das operações bem-sucedidas serão apresentadas separadamente. A coleta excluirá o aquecimento, com relógios sincronizados, amostras a cada cinco segundos e contadores antes da medição e após a conclusão das requisições. Nos dois modos, até dez operações acessarão o banco simultaneamente, com espera de cinco segundos. Recusas anteriores à transação contarão como erros; falhas de escrita com resultado incerto interromperão a execução. O acerto do *cache* será a razão entre acertos e a soma de acertos, faltas e desvios por falha; estatísticas internas do Redis serão auxiliares (Niswar *et al.*, 2024).
 
 ## 10. Página 9 — consolidação
 
@@ -145,8 +145,10 @@ Fonte: O Autor (2026)
 | --- | --- | --- |
 | Requisições | Tempo de resposta | k6 |
 | Requisições | Percentis p95 e p99 | k6 |
-| Requisições | Vazão | k6 |
-| Requisições | Taxa de erros | k6 |
+| Requisições | Vazão de tentativas | k6 |
+| Requisições | Vazão de sucessos | k6 |
+| Requisições | Latência dos sucessos | k6 |
+| Requisições | Erros e recusas | k6 |
 | Aplicação | CPU e memória | Docker |
 | PostgreSQL | CPU e memória | Docker |
 | Redis | CPU e memória | Docker |

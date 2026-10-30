@@ -4,6 +4,7 @@ import br.edu.tcc.pedidos.dto.request.NovoClienteRequest;
 import br.edu.tcc.pedidos.dto.response.ClienteResponse;
 import br.edu.tcc.pedidos.mapper.ClienteMapper;
 import br.edu.tcc.pedidos.model.Cliente;
+import br.edu.tcc.pedidos.service.ControleAcessoBanco;
 import br.edu.tcc.pedidos.service.ClienteService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.Positive;
@@ -21,10 +22,15 @@ import org.springframework.web.bind.annotation.RestController;
 @Validated
 public class ClienteController {
 
+    private final ControleAcessoBanco controleAcessoBanco;
     private final ClienteService clienteService;
     private final ClienteMapper clienteMapper;
 
-    public ClienteController(ClienteService clienteService, ClienteMapper clienteMapper) {
+    public ClienteController(
+            ControleAcessoBanco controleAcessoBanco,
+            ClienteService clienteService,
+            ClienteMapper clienteMapper) {
+        this.controleAcessoBanco = controleAcessoBanco;
         this.clienteService = clienteService;
         this.clienteMapper = clienteMapper;
     }
@@ -34,7 +40,8 @@ public class ClienteController {
     public ClienteResponse criarCliente(
             @RequestHeader @Positive long tenantId,
             @Valid @RequestBody NovoClienteRequest novoCliente) {
-        Cliente cliente = clienteService.criarCliente(tenantId, novoCliente.nome());
+        Cliente cliente = controleAcessoBanco.executar(
+                () -> clienteService.criarCliente(tenantId, novoCliente.nome()));
         return clienteMapper.paraResponse(cliente);
     }
 }

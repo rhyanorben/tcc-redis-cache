@@ -1,5 +1,8 @@
 import importlib.util
 import threading
+import signal
+import tempfile
+from unittest.mock import Mock
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -12,6 +15,31 @@ specification.loader.exec_module(session_module)
 
 
 class ManualSessionTest(unittest.TestCase):
+    def test_hangup_closes_manual_sessions_and_removes_socket(self):
+        previous = {value: signal.getsignal(value) for value in (signal.SIGHUP, signal.SIGTERM)}
+        try:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                socket = root / 'session.sock'
+                server = Mock()
+                server.handle_request.side_effect = lambda: signal.raise_signal(signal.SIGHUP)
+                def create_server(*arguments):
+                    socket.touch()
+                    return server
+                with patch.object(session_module, 'ROOT', root), patch.object(session_module, 'SOCKET', socket), \
+                        patch.object(session_module.os, 'getuid', return_value=0), \
+                        patch.object(session_module.getpass, 'getpass', return_value='manual-value'), \
+                        patch.object(session_module, 'Session') as session, \
+                        patch.object(session_module.socketserver, 'ThreadingUnixStreamServer', side_effect=create_server), \
+                        patch('sys.argv', ['manual_session.py']):
+                    session_module.main()
+                    self.assertEqual(3, session.return_value.close.call_count)
+                    self.assertFalse(socket.exists())
+                    server.server_close.assert_called_once()
+        finally:
+            for value, handler in previous.items():
+                signal.signal(value, handler)
+
     def test_disconnected_vm_fails_without_waiting_for_request_timeout(self):
         session = session_module.Session.__new__(session_module.Session)
         session.service = 'postgres'

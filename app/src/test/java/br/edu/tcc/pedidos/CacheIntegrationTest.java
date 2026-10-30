@@ -3,6 +3,9 @@ package br.edu.tcc.pedidos;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.awaitility.Awaitility.await;
+import static org.mockito.Mockito.doAnswer;
+import static org.mockito.Mockito.clearInvocations;
+import static org.mockito.Mockito.verifyNoInteractions;
 
 import br.edu.tcc.pedidos.cache.RedisPaginaCache;
 import br.edu.tcc.pedidos.config.CacheProperties;
@@ -12,12 +15,15 @@ import br.edu.tcc.pedidos.model.PedidoResumo;
 import br.edu.tcc.pedidos.model.StatusPedido;
 import br.edu.tcc.pedidos.service.ClienteService;
 import br.edu.tcc.pedidos.service.ConsultaPedidosService;
+import br.edu.tcc.pedidos.service.ControleAcessoBanco;
 import br.edu.tcc.pedidos.service.EmpresaService;
 import br.edu.tcc.pedidos.service.PedidoService;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.zaxxer.hikari.HikariDataSource;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
+import jakarta.persistence.EntityManager;
 import java.math.BigDecimal;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -26,9 +32,16 @@ import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
+import java.sql.Connection;
+import java.sql.DriverManager;
+import java.sql.PreparedStatement;
+import java.sql.ResultSet;
+import java.sql.SQLException;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.HexFormat;
 import java.util.List;
+import java.util.Map;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -36,7 +49,9 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.function.Supplier;
+import javax.sql.DataSource;
 import org.apache.commons.lang3.ObjectUtils;
+import org.hibernate.Session;
 import org.junit.jupiter.api.AfterAll;
 import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.BeforeEach;
@@ -54,8 +69,10 @@ import org.springframework.data.redis.connection.lettuce.LettuceConnectionFactor
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.web.server.ResponseStatusException;
 import org.testcontainers.containers.GenericContainer;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -94,18 +111,27 @@ class CacheIntegrationTest {
     private static StringRedisTemplate redisAdministrador;
 
     @Autowired
+    DataSource banco;
+
+    @MockitoSpyBean
     EmpresaService empresas;
+
+    @Autowired
+    EntityManager entityManager;
 
     @Autowired
     ClienteService clientes;
 
-    @Autowired
+    @MockitoSpyBean
     PedidoService pedidos;
+
+    @Autowired
+    ControleAcessoBanco controleAcessoBanco;
 
     @Autowired
     ConsultaPedidosService consultas;
 
-    @Autowired
+    @MockitoSpyBean
     RedisPaginaCache cache;
 
     @Autowired
@@ -192,6 +218,217 @@ class CacheIntegrationTest {
         assertThat(respostaJson.get("totalElements").asLong()).isEqualTo(paginaOriginal.getTotalElements());
         assertThat(respostaJson.get("page").asInt()).isEqualTo(paginaOriginal.getNumber());
         assertThat(respostaJson.get("size").asInt()).isEqualTo(paginaOriginal.getSize());
+    }
+
+    @Test
+    void consultaAoBancoPeloCacheUsaTransacaoSomenteLeituraComSnapshotRepetivel() {
+        criarPedido();
+        AtomicInteger isolamentoObservado = new AtomicInteger();
+        doAnswer(invocacao -> {
+            assertThat(TransactionSynchronizationManager.isActualTransactionActive()).isTrue();
+            assertThat(TransactionSynchronizationManager.isCurrentTransactionReadOnly()).isTrue();
+            entityManager.unwrap(Session.class).doWork(conexao ->
+                    isolamentoObservado.set(conexao.getTransactionIsolation()));
+            return invocacao.callRealMethod();
+        }).when(empresas).validarEmpresa(empresaId);
+
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getTotalElements()).isEqualTo(1);
+        assertThat(isolamentoObservado.get()).isEqualTo(Connection.TRANSACTION_REPEATABLE_READ);
+    }
+
+    @Test
+    void hitFuncionaComTodasAsConexoesDoPoolOcupadas() throws Exception {
+        criarPedido();
+        Page<PedidoResumo> paginaOriginal = consultas.listar(empresaId, paginacao(0, 20));
+        HikariDataSource pool = banco.unwrap(HikariDataSource.class);
+        List<Connection> conexoesReservadas = new ArrayList<>();
+
+        assertThat(pool.getMaximumPoolSize()).isEqualTo(10);
+        assertThat(pool.getConnectionTimeout()).isEqualTo(5000);
+
+        try {
+            for (int indice = 0; indice < pool.getMaximumPoolSize(); indice++) {
+                conexoesReservadas.add(banco.getConnection());
+            }
+
+            assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isEqualTo(10);
+            HttpResponse<String> respostaEmCache = consultarApi("/api/pedidos?page=0&size=20", empresaId);
+
+            assertThat(respostaEmCache.statusCode()).as(respostaEmCache.body()).isEqualTo(200);
+            assertThat(json.readTree(respostaEmCache.body()).get("content"))
+                    .isEqualTo(json.readTree(json.writeValueAsString(paginaOriginal.getContent())));
+            assertThat(pool.getHikariPoolMXBean().getThreadsAwaitingConnection()).isZero();
+        } finally {
+            for (Connection conexao : conexoesReservadas) {
+                conexao.close();
+            }
+        }
+    }
+
+    @Test
+    void falhaJdbcDepoisDaAdmissaoNaoRecebeMarcadorDeRejeicaoSegura() throws Exception {
+        Pedido pedidoOriginal = criarPedido();
+        HikariDataSource pool = banco.unwrap(HikariDataSource.class);
+        List<Connection> conexoesReservadas = new ArrayList<>();
+
+        try {
+            for (int indice = 0; indice < pool.getMaximumPoolSize(); indice++) {
+                conexoesReservadas.add(banco.getConnection());
+            }
+
+            HttpResponse<String> resposta = enviarEscrita(
+                    "PATCH", "/api/pedidos/" + pedidoOriginal.getId() + "/status",
+                    json.writeValueAsString(Map.of("status", "CONFIRMADO")));
+            JsonNode problema = json.readTree(resposta.body());
+
+            assertThat(resposta.statusCode()).as(resposta.body()).isEqualTo(500);
+            assertThat(problema.has("operationApplied")).isFalse();
+            assertThat(problema.has("code")).isFalse();
+            conferirPedidoEItensNoBanco(pedidoOriginal.getId(), "ABERTO");
+        } finally {
+            for (Connection conexao : conexoesReservadas) {
+                conexao.close();
+            }
+        }
+
+        HttpResponse<String> respostaRecuperada = enviarEscrita(
+                "PATCH", "/api/pedidos/" + pedidoOriginal.getId() + "/status",
+                json.writeValueAsString(Map.of("status", "CONFIRMADO")));
+
+        assertThat(respostaRecuperada.statusCode()).as(respostaRecuperada.body()).isEqualTo(200);
+    }
+
+    @Test
+    void capacidadeEsgotadaPreservaHitERejeitaOperacoesAntesDeChamarServicosTransacionais() throws Exception {
+        Pedido pedidoOriginal = criarPedido();
+        consultas.listar(empresaId, paginacao(0, 20));
+        String geracaoOriginal = buscarGeracaoCache(empresaId);
+        double invalidacoesOriginais = contarMetrica("tcc.cache.invalidations");
+        HikariDataSource pool = banco.unwrap(HikariDataSource.class);
+        CountDownLatch vagasOcupadas = new CountDownLatch(10);
+        CountDownLatch liberarVagas = new CountDownLatch(1);
+        List<Future<Void>> ocupacoes = new ArrayList<>();
+        clearInvocations(pedidos, empresas);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(10)) {
+            try {
+                for (int indice = 0; indice < 10; indice++) {
+                    ocupacoes.add(executor.submit(() -> controleAcessoBanco.executar(() -> {
+                        vagasOcupadas.countDown();
+                        aguardarLiberacaoDeVagas(liberarVagas);
+                        return null;
+                    })));
+                }
+
+                assertThat(vagasOcupadas.await(5, TimeUnit.SECONDS)).isTrue();
+                assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isZero();
+                assertThat(consultarApi("/api/pedidos?page=0&size=20", empresaId).statusCode()).isEqualTo(200);
+
+                HttpResponse<String> respostaCriacao = enviarEscrita(
+                        "POST", "/api/pedidos",
+                        """
+                        {"clienteId":%d,"itens":[{"descricao":"Sobrecarga","quantidade":1,"precoUnitario":1}]}
+                        """.formatted(clienteId));
+                HttpResponse<String> respostaStatus = enviarEscrita(
+                        "PATCH", "/api/pedidos/" + pedidoOriginal.getId() + "/status",
+                        json.writeValueAsString(Map.of("status", "CONFIRMADO")));
+                HttpResponse<String> respostaSemCache = consultarApi("/api/pedidos?page=0&size=1", empresaId);
+                HttpResponse<String> respostaEmpresa = enviarEscrita(
+                        "POST", "/api/empresas", json.writeValueAsString(Map.of("nome", "Empresa rejeitada")));
+                HttpResponse<String> respostaCliente = enviarEscrita(
+                        "POST", "/api/clientes", json.writeValueAsString(Map.of("nome", "Cliente rejeitado")));
+
+                for (HttpResponse<String> resposta : List.of(
+                        respostaCriacao, respostaStatus, respostaSemCache, respostaEmpresa, respostaCliente)) {
+                    assertThat(resposta.statusCode()).as(resposta.body()).isEqualTo(503);
+                    JsonNode problema = json.readTree(resposta.body());
+                    assertThat(problema.get("type").asText()).isEqualTo("urn:tcc:problem:database-capacity");
+                    assertThat(problema.get("code").asText()).isEqualTo("DATABASE_CAPACITY_EXCEEDED");
+                    assertThat(problema.get("operationApplied").asBoolean()).isFalse();
+                    assertThat(problema.has("trace")).isFalse();
+                    assertThat(resposta.headers().firstValue("Content-Type")).contains("application/problem+json");
+                }
+
+                verifyNoInteractions(pedidos, empresas);
+                assertThat(pool.getHikariPoolMXBean().getActiveConnections()).isZero();
+                assertThat(buscarGeracaoCache(empresaId)).isEqualTo(geracaoOriginal);
+                assertThat(contarMetrica("tcc.cache.invalidations")).isEqualTo(invalidacoesOriginais);
+                conferirPedidoEItensNoBanco(pedidoOriginal.getId(), "ABERTO");
+            } finally {
+                liberarVagas.countDown();
+                for (Future<Void> ocupacao : ocupacoes) {
+                    ocupacao.get(5, TimeUnit.SECONDS);
+                }
+            }
+        }
+
+        HttpResponse<String> respostaRecuperada = enviarEscrita(
+                "PATCH", "/api/pedidos/" + pedidoOriginal.getId() + "/status",
+                json.writeValueAsString(Map.of("status", "CONFIRMADO")));
+
+        assertThat(respostaRecuperada.statusCode()).as(respostaRecuperada.body()).isEqualTo(200);
+        assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoOriginal);
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getContent().getFirst().status())
+                .isEqualTo(StatusPedido.CONFIRMADO);
+    }
+
+    @Test
+    void vagaPermaneceOcupadaAteConcluirCommitEInvalidacao() throws Exception {
+        Pedido pedidoOriginal = criarPedido();
+        consultas.listar(empresaId, paginacao(0, 20));
+        String geracaoOriginal = buscarGeracaoCache(empresaId);
+        CountDownLatch vagasOcupadas = new CountDownLatch(9);
+        CountDownLatch liberarVagas = new CountDownLatch(1);
+        CountDownLatch invalidacaoIniciada = new CountDownLatch(1);
+        CountDownLatch liberarInvalidacao = new CountDownLatch(1);
+        List<Future<Void>> ocupacoes = new ArrayList<>();
+        doAnswer(invocacao -> {
+            invalidacaoIniciada.countDown();
+            aguardarLiberacaoDeVagas(liberarInvalidacao);
+            return invocacao.callRealMethod();
+        }).when(cache).invalidar(empresaId);
+
+        try (ExecutorService executor = Executors.newFixedThreadPool(10)) {
+            Future<HttpResponse<String>> atualizacao;
+            try {
+                for (int indice = 0; indice < 9; indice++) {
+                    ocupacoes.add(executor.submit(() -> controleAcessoBanco.executar(() -> {
+                        vagasOcupadas.countDown();
+                        aguardarLiberacaoDeVagas(liberarVagas);
+                        return null;
+                    })));
+                }
+                assertThat(vagasOcupadas.await(5, TimeUnit.SECONDS)).isTrue();
+                atualizacao = executor.submit(() -> enviarEscrita(
+                        "PATCH", "/api/pedidos/" + pedidoOriginal.getId() + "/status",
+                        json.writeValueAsString(Map.of("status", "CONFIRMADO"))));
+                assertThat(invalidacaoIniciada.await(5, TimeUnit.SECONDS)).isTrue();
+                assertThat(atualizacao.isDone()).isFalse();
+                conferirPedidoEItensNoBanco(pedidoOriginal.getId(), "CONFIRMADO");
+
+                HttpResponse<String> rejeicao = enviarEscrita(
+                        "POST", "/api/pedidos",
+                        """
+                        {"clienteId":%d,"itens":[{"descricao":"Espera","quantidade":1,"precoUnitario":1}]}
+                        """.formatted(clienteId));
+
+                assertThat(rejeicao.statusCode()).as(rejeicao.body()).isEqualTo(503);
+                assertThat(json.readTree(rejeicao.body()).get("code").asText())
+                        .isEqualTo("DATABASE_CAPACITY_EXCEEDED");
+                conferirPedidoEItensNoBanco(pedidoOriginal.getId(), "CONFIRMADO");
+            } finally {
+                liberarInvalidacao.countDown();
+                liberarVagas.countDown();
+                for (Future<Void> ocupacao : ocupacoes) {
+                    ocupacao.get(5, TimeUnit.SECONDS);
+                }
+            }
+            assertThat(atualizacao.get(5, TimeUnit.SECONDS).statusCode()).isEqualTo(200);
+        }
+
+        assertThat(buscarGeracaoCache(empresaId)).isNotEqualTo(geracaoOriginal);
+        assertThat(consultas.listar(empresaId, paginacao(0, 20)).getContent().getFirst().status())
+                .isEqualTo(StatusPedido.CONFIRMADO);
     }
 
     @Test
@@ -480,6 +717,50 @@ class CacheIntegrationTest {
         assertThat(paginaEmCache.getNumber()).isEqualTo(5);
         assertThat(paginaEmCache.isFirst()).isFalse();
         assertThat(paginaEmCache.isLast()).isTrue();
+    }
+
+    private void aguardarLiberacaoDeVagas(CountDownLatch liberarVagas) {
+        try {
+            if (!liberarVagas.await(60, TimeUnit.SECONDS)) {
+                throw new AssertionError("Tempo excedido ao manter vagas do banco ocupadas");
+            }
+        } catch (InterruptedException interrupcao) {
+            Thread.currentThread().interrupt();
+            throw new AssertionError(interrupcao);
+        }
+    }
+
+    private HttpResponse<String> enviarEscrita(String metodo, String caminho, String corpo) throws Exception {
+        HttpRequest requisicao = HttpRequest.newBuilder(URI.create("http://localhost:" + porta + caminho))
+                .header("tenantId", Long.toString(empresaId))
+                .header("Content-Type", "application/json")
+                .method(metodo, HttpRequest.BodyPublishers.ofString(corpo))
+                .build();
+        return clienteHttp.send(requisicao, HttpResponse.BodyHandlers.ofString());
+    }
+
+    private void conferirPedidoEItensNoBanco(long pedidoId, String statusEsperado) throws SQLException {
+        String consulta = """
+                SELECT p.id, p.status,
+                    (SELECT count(*) FROM tcc.pedido WHERE tenant_id = ?) AS pedidos,
+                    (SELECT count(*) FROM tcc.item_pedido WHERE tenant_id = ?) AS itens
+                FROM tcc.pedido p WHERE p.id = ?
+                """;
+
+        try (Connection conexao = DriverManager.getConnection(
+                    POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword());
+             PreparedStatement comando = conexao.prepareStatement(consulta)) {
+            comando.setLong(1, empresaId);
+            comando.setLong(2, empresaId);
+            comando.setLong(3, pedidoId);
+            try (ResultSet resultado = comando.executeQuery()) {
+                assertThat(resultado.next()).isTrue();
+                assertThat(resultado.getLong("id")).isEqualTo(pedidoId);
+                assertThat(resultado.getString("status")).isEqualTo(statusEsperado);
+                assertThat(resultado.getLong("pedidos")).isEqualTo(1);
+                assertThat(resultado.getLong("itens")).isEqualTo(1);
+            }
+        }
     }
 
     private Pedido criarPedido() {

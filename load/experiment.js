@@ -32,8 +32,15 @@ const readCount = new Counter('measurement_reads');
 const writeCount = new Counter('measurement_writes');
 const readErrors = new Counter('measurement_read_errors');
 const writeErrors = new Counter('measurement_write_errors');
+const readSuccesses = new Counter('measurement_read_successes');
+const writeSuccesses = new Counter('measurement_write_successes');
+const readRejections = new Counter('measurement_read_rejections');
+const writeRejections = new Counter('measurement_write_rejections');
+const writeUncertain = new Counter('measurement_write_uncertain');
 const readLatency = new Trend('measurement_read_duration_ms', true);
 const writeLatency = new Trend('measurement_write_duration_ms', true);
+const readSuccessLatency = new Trend('measurement_read_success_duration_ms', true);
+const writeSuccessLatency = new Trend('measurement_write_success_duration_ms', true);
 const warmupErrors = new Counter('warmup_read_errors');
 const warmupReads = new Counter('warmup_reads');
 const contractErrors = new Counter('response_contract_errors');
@@ -42,7 +49,6 @@ let iteration = 0;
 let operationBlock = [];
 let workloadRandom;
 let warmupRandom;
-let failedWrite = false;
 
 export const options = {
     scenarios: {
@@ -70,6 +76,19 @@ export function setup() {
     };
 }
 
+function databaseCapacityRejected(response) {
+    if (response.status !== 503) {
+        return false;
+    }
+    try {
+        const problem = response.json();
+        return problem.type === 'urn:tcc:problem:database-capacity'
+            && problem.code === 'DATABASE_CAPACITY_EXCEEDED' && problem.operationApplied === false;
+    } catch (error) {
+        return false;
+    }
+}
+
 function readOrders(data, selected, measured) {
     const generator = measured ? workloadRandom : warmupRandom;
     const page = pageFor(generator, selected.company.total_orders / manifest.page_size);
@@ -93,6 +112,12 @@ function readOrders(data, selected, measured) {
         readCount.add(1);
         readErrors.add(valid ? 0 : 1);
         readLatency.add(response.timings.duration);
+        if (valid) {
+            readSuccesses.add(1);
+            readSuccessLatency.add(response.timings.duration);
+        } else if (databaseCapacityRejected(response)) {
+            readRejections.add(1);
+        }
     } else {
         warmupReads.add(1);
         warmupErrors.add(valid ? 0 : 1);
@@ -121,11 +146,19 @@ function writeOrder(selected) {
     writeCount.add(1);
     writeErrors.add(valid ? 0 : 1);
     writeLatency.add(response.timings.duration);
-    if (!valid) {
-        failedWrite = true;
+    if (valid) {
+        writeSuccesses.add(1);
+        writeSuccessLatency.add(response.timings.duration);
+        writeIndex += 1;
+    } else if (databaseCapacityRejected(response)) {
+        writeRejections.add(1);
+    } else {
+        writeUncertain.add(1);
+        if (response.status === 200) {
+            contractErrors.add(1);
+        }
         exec.test.abort('PATCH falhou: estado persistido incerto; restaure a base e invalide esta execução.');
     }
-    writeIndex += 1;
 }
 
 export default function (data) {
@@ -168,10 +201,17 @@ export function handleSummary(data) {
     const reads = count('measurement_reads');
     const writes = count('measurement_writes');
     const errors = count('measurement_read_errors') + count('measurement_write_errors');
+    const successfulReads = count('measurement_read_successes');
+    const successfulWrites = count('measurement_write_successes');
+    const rejectedReads = count('measurement_read_rejections');
+    const rejectedWrites = count('measurement_write_rejections');
+    const uncertainWrites = count('measurement_write_uncertain');
+    const successfulRequests = successfulReads + successfulWrites;
     const elapsed = Math.max(0, Math.min(measurementMs, Date.now() - (windows.measurement_start_unix_ms || Date.now())));
     const completed = measurementMs > 0 && elapsed >= measurementMs;
     const summary = {
-        schema_version: 1,
+        schema_version: 2,
+        protocol_version: 2,
         scope: 'measurement_only',
         run_id: runId,
         phase,
@@ -186,14 +226,23 @@ export function handleSummary(data) {
         measurement_completed_unix_ms: Date.now(),
         nominal_measurement_seconds: measurementMs / 1000,
         valid: phase === 'warmup' ? count('warmup_reads') > 0 && count('response_contract_errors') === 0
-            : completed && !failedWrite && count('measurement_write_errors') === 0
-                && count('response_contract_errors') === 0,
+            : completed && uncertainWrites === 0 && count('response_contract_errors') === 0,
         smoke_test: smokeSeconds > 0,
         valid_for_campaign: phase !== 'warmup' && smokeSeconds === 0 && completed
-            && !failedWrite && count('measurement_write_errors') === 0 && count('response_contract_errors') === 0,
+            && uncertainWrites === 0 && count('response_contract_errors') === 0,
         reads,
         writes,
         requests: reads + writes,
+        read_attempts: reads,
+        write_attempts: writes,
+        attempts: reads + writes,
+        read_successes: successfulReads,
+        write_successes: successfulWrites,
+        successes: successfulRequests,
+        read_rejections: rejectedReads,
+        write_rejections: rejectedWrites,
+        rejections: rejectedReads + rejectedWrites,
+        write_uncertain: uncertainWrites,
         errors,
         read_errors: count('measurement_read_errors'),
         write_errors: count('measurement_write_errors'),
@@ -201,10 +250,15 @@ export function handleSummary(data) {
         warmup_reads: count('warmup_reads'),
         response_contract_errors: count('response_contract_errors'),
         throughput_requests_per_second: measurementMs > 0 ? (reads + writes) / (measurementMs / 1000) : null,
+        successful_requests_per_second: measurementMs > 0 ? successfulRequests / (measurementMs / 1000) : null,
+        successful_read_requests_per_second: measurementMs > 0 ? successfulReads / (measurementMs / 1000) : null,
+        successful_write_requests_per_second: measurementMs > 0 ? successfulWrites / (measurementMs / 1000) : null,
         error_ratio: reads + writes > 0 ? errors / (reads + writes) : null,
         observed_write_ratio: reads + writes > 0 ? writes / (reads + writes) : null,
         read_latency_ms: latency('measurement_read_duration_ms'),
         write_latency_ms: latency('measurement_write_duration_ms'),
+        read_success_latency_ms: latency('measurement_read_success_duration_ms'),
+        write_success_latency_ms: latency('measurement_write_success_duration_ms'),
     };
     return {
         [__ENV.SUMMARY_PATH || 'measurement-summary.json']: `${JSON.stringify(summary, null, 2)}\n`,

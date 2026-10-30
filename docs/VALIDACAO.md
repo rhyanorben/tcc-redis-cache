@@ -60,3 +60,20 @@ Rede e serviços permaneceram disponíveis após a inicialização de hoje; as r
 | Piloto real | Par 90/10, 25 usuários, cache desligado/ligado: duas medições completas de 300 s, sem erros, com restauração e coleta válidas |
 
 O banco anterior permanece com dois clientes, seis pedidos e 18 itens em duas empresas. A [preparação e o piloto](PREPARACAO_E_PILOTO.md) sucedem as pendências da conferência inicial desta data. Os arquivos brutos ficam em `results/piloto-20261022/`, fora do Git. Um par não fornece a consolidação das cinco repetições; a campanha permanece pendente.
+
+
+## Campanha em blocos — 23/10/2026
+
+A conferência sem carga confirmou serviços, comunicação, relógios, backup e os 8.500.100 registros. A automação mantém o plano de 200 execuções em 20 blocos, com retomada por pares, pacotes ZIP e acompanhamento da geradora e do disco do notebook. As verificações locais aprovaram 37 casos de monitoramento, 26 de carga/blocos e instalação da sequência e 11 de proteção/sessões, sem executar k6 nas VMs. O [guia do operador](CAMPANHA_EM_BLOCOS.md) contém os comandos e as estimativas. A execução sequencial passou nas simulações locais; sua instalação na geradora ficou pendente porque a tcc-load estava indisponível nesta atualização. Nenhum ensaio da campanha foi iniciado nesta preparação.
+
+## Correção do início do bloco 1 — 24/10/2026
+
+A tentativa do operador encerrou antes da restauração: o organizador dos blocos não passava o caminho do backup ao executor. A correção foi instalada na tcc-load, com hashes conferidos e cópia da versão e da tentativa anterior. Os 29 testes locais de carga/blocos passaram, incluindo integração com o executor real e ações externas simuladas. Nenhuma medição foi encontrada na campanha; o bloco não foi reiniciado pelo chat. O operador deve executar novamente o bloco 1.
+
+## Coleta durante a transição do k6 — 24/10/2026
+
+A segunda tentativa concluiu a medição com cache desligado e parou após o aquecimento com cache ligado: o contêiner encerrou entre sua identificação e a consulta de recursos. O coletor agora confere se o contêiner deixou de executar antes de tratar essa transição como normal; falhas reais do Docker continuam interrompendo o bloco. A correção passou em 36 testes locais de carga/blocos e foi instalada sem iniciar ensaios, com backup das tentativas e registro da versão. Como nenhum par foi concluído, os dois modos do primeiro par serão repetidos; a medição isolada anterior permanece preservada e fora da consolidação.
+
+## Revisão integral de capacidade — 24/10/2026
+
+A API foi revisada e implantada: hit de cache sem conexão PostgreSQL, snapshot de listagem preservado e admissão antes da transação com recusa segura. Passaram 50 testes Java, 57 de carga/automação Python, 37 de monitoramento e 22 de agentes, além das duas suítes JavaScript. A conferência pelo lançador manual validou serviços, referência, relógios, recursos e hashes; uma consulta GET da tcc-load retornou HTTP 200 pela Ethernet. Não foram iniciados piloto ou ensaios da campanha revisada. O [piloto de capacidade](CAMPANHA_EM_BLOCOS.md) é o próximo comando do operador; os resultados antigos permanecem preservados e excluídos da nova comparação. Evidências em `results/campanha-20261024-v2/readiness/`.

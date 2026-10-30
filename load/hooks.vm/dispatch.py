@@ -68,8 +68,9 @@ def monitor_start():
 
 def monitor_stop():
     run_id = remote_run_id()
+    cleanup = os.environ.get('MONITOR_MODE') == 'cleanup'
     summary_path = Path(os.environ['MEASUREMENT_SUMMARY'])
-    summary = json.loads(summary_path.read_text()) if summary_path.is_file() else None
+    summary = json.loads(summary_path.read_text()) if not cleanup and summary_path.is_file() else None
     completed = summary['measurement_completed_unix_ms'] if summary else 0
     failures = []
     results = {}
@@ -79,16 +80,22 @@ def monitor_stop():
             try:
                 results[service] = future.result()
             except BaseException as error:
-                failures.append(str(error))
+                failures.append(f'{service}: {error}')
+    directory = Path(os.environ['RUN_DIR']) / 'monitoring'
+    for service, result in results.items():
+        (directory / f'{service}.jsonl').write_bytes(base64.b64decode(result['jsonl']))
     if failures:
         raise RuntimeError('; '.join(failures))
+    if cleanup:
+        unconfirmed = [service for service, result in results.items() if result.get('monitoring_stopped') is not True]
+        if unconfirmed:
+            raise RuntimeError(f'Parada dos coletores não confirmada: {", ".join(unconfirmed)}')
+        return {'monitoring_stopped': True, 'raw_files_preserved': list(results), 'summaries_generated': False}
     if summary is None:
-        raise ValueError('Coletores encerrados, mas resumo de medição ausente')
-    directory = Path(os.environ['RUN_DIR']) / 'monitoring'
+        raise ValueError('Coletores encerrados e arquivos brutos preservados; resumo de medição ausente')
     summarizer = Path(__file__).resolve().parents[2] / 'monitoring/resumir.py'
-    for service, result in results.items():
+    for service in results:
         source = directory / f'{service}.jsonl'
-        source.write_bytes(base64.b64decode(result['jsonl']))
         destination = directory / f'{service}-summary.json'
         subprocess.run([sys.executable, str(summarizer), str(source), '--measurement-summary', str(summary_path), '--output', str(destination)], check=True, stdout=sys.stderr)
     return {'monitoring_stopped': True}

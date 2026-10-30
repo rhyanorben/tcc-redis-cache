@@ -1,44 +1,35 @@
 # Protocolo experimental
 
-Este protocolo fixa as condições para comparar a mesma API com cache desligado e ligado. A API foi implantada e validada funcionalmente nas VMs em 20/10/2026. A base completa e os hooks remotos foram preparados em 22/10/2026; o [registro da preparação e do piloto](PREPARACAO_E_PILOTO.md) apresenta as evidências. A campanha completa permanece pendente.
+O protocolo 2 compara a mesma API com cache desligado e ligado na campanha `campanha-20261024-v2`. A [revisão de capacidade](REVISAO_CAPACIDADE.md) corrige a transação externa à consulta do cache e distingue recusa anterior à escrita de falha com estado incerto. A campanha de 23/10 permanece como registro da configuração anterior, sem aproveitamento das medições na nova campanha. O [guia em blocos](CAMPANHA_EM_BLOCOS.md) apresenta os comandos.
 
 ## Condições fixas
 
 | Item | Definição |
 | --- | --- |
-| Modelo | `empresa`, `cliente`, `pedido`, `item_pedido`; banco e schema compartilhados, segregação por `tenant_id` |
+| Modelo | `empresa`, `cliente`, `pedido`, `item_pedido`; tabelas compartilhadas, segregação por `tenant_id` |
 | Base | 100 empresas, 5.000 clientes, 20.000 pedidos e 60.000 itens por empresa; 8.500.100 registros |
-| Leitura | `GET /api/pedidos`, página de 20 pedidos, `criadoEm DESC, id DESC`; resumo com cliente, sem carregar itens |
-| Empresas ativas | As mesmas 25 empresas em todos os níveis de concorrência |
-| Localidade | 80% das leituras sobre um conjunto fixo de 20% das páginas de cada empresa ativa; demais leituras sobre as outras páginas |
-| Escrita | `PATCH` de status; cada usuário possui um pedido exclusivo e alterna estados para produzir alterações reais |
-| Redis | 1 GiB de `maxmemory`, `allkeys-lru`, sem RDB/AOF, TTL fixo de 60 s sem renovação na leitura |
-| Invalidação | Troca de geração da empresa após commit; páginas anteriores expiram pelo TTL |
-| API | Instância única; mesmo artefato, pool, índices, timeout e recursos nos dois modos |
-| Aquecimento | 2 minutos somente de leitura, excluídos da análise |
-| Medição | 5 minutos por execução |
+| Leitura | Página de 20 resumos de pedidos com cliente, sem itens; `criadoEm DESC, id DESC` |
+| Empresas ativas | As mesmas 25 em todos os níveis de concorrência |
+| Localidade | 80% das leituras nas primeiras 20% das páginas; restantes nas demais |
+| Escrita | PATCH de status; um pedido exclusivo por usuário, alternando estados após confirmações |
+| Redis | 1 GiB para entradas, `allkeys-lru`, sem persistência; TTL de 60 s, sem renovação na leitura |
+| Invalidação | Troca de geração da empresa após commit; páginas antigas expiram pelo TTL |
+| API | Instância e artefato únicos; pool de 10 conexões, espera de 5 s e recursos iguais nos dois modos |
+| Admissão ao banco | Até 10 operações simultâneas, fila justa e espera máxima de 5 s, antes da transação |
+| Aquecimento | 120 s somente de leitura, excluídos da análise |
+| Medição | 300 s por execução |
 
-As 100 empresas compõem a base; 25 recebem tráfego para manter constante a quantidade de empresas ativas. Distribua os usuários igualmente entre elas: 1, 2, 4, 10 ou 20 usuários por empresa. Não compare esses resultados como uma avaliação de 100 empresas simultaneamente ativas.
+Acertos no cache não abrem transação nem passam pela admissão ao banco. Ausências e desvios por falha consultam PostgreSQL em transação `REPEATABLE_READ`. O mesmo limite atende leituras que chegam ao banco e escritas, nos dois modos.
 
-O cache tem uma janela entre commit e invalidação e não oferece leitura linearizável. Seu TTL limita a retenção de versões antigas; expirações, invalidações e expulsões por memória fazem parte do cenário avaliado. O limite Redis é inferior à memória total de sua VM: o processo também possui estruturas e buffers fora de `maxmemory`.
+As 100 empresas compõem a base; somente 25 recebem tráfego, com 1, 2, 4, 10 ou 20 usuários por empresa. Isso não equivale a 100 empresas simultaneamente ativas. O cache não oferece leitura linearizável: há uma janela entre commit e invalidação; expiração, invalidação e expulsão por memória fazem parte do cenário. A VM Redis também precisa de memória para estruturas e buffers fora do limite das entradas.
 
-## Base e piloto
+## Base e verificação prévia
 
-Gere a base uma vez em ambiente experimental isolado, confira totais, integridade e três itens por pedido. Confira espaço em disco, tamanho de tabelas e índices, planos SQL e consumo de memória antes da campanha. Não carregue milhões de registros sem essa verificação.
+A base de referência, seu backup e manifesto foram preparados e validados na etapa registrada em [PREPARACAO_E_PILOTO.md](PREPARACAO_E_PILOTO.md). Preserve o mesmo backup, IDs reais, índices e volumes. A leitura não carrega os itens, mas eles permanecem na base e nas operações de negócio. Antes de gerar outra base, confira espaço, contagens, integridade, planos SQL e consumo de memória.
 
-Exemplo de geração de SQL, sem conectar ou alterar o banco:
+Testes funcionais e de integração verificam a implementação; não demonstram sua capacidade sob 500 usuários. Nenhum ensaio da revisão é iniciado pelo chat. O operador executa `--piloto`: o par original 90/10 com 500 usuários, nos dois modos, com a mesma semente e os tempos completos. A coleta fica separada e excluída da campanha. Após conferir seu ZIP, o operador inicia o bloco 1; sequências ficam para depois da conferência desse bloco. Pilotos e dados da implementação anterior não integram as cinco repetições da nova campanha.
 
-```sh
-python3 scripts/gerar_base.py --empresas 100 --clientes-por-empresa 5000 \
-  --pedidos-por-empresa 20000 --itens-por-pedido 3 --lote base-v1 \
-  --saida /tmp/tcc-base-v1.sql
-```
-
-Use os IDs efetivamente gerados; eles não precisam começar em 1. A listagem consulta pedidos e clientes; os itens compõem a base e as operações de negócio, mas não são carregados pela leitura avaliada.
-
-Após preparar a VM de carga, carregar a base e validar os coletores e hooks, execute um piloto curto. Confirme operações efetivas de escrita, ausência de erros de contrato, distribuição de páginas/empresas, diferença entre hit e miss e ausência de sobrecarga no gerador. O piloto valida o procedimento; não substitui as repetições finais nem fornece resultados da campanha.
-
-## Campanha e pareamento
+## Matriz e pareamento
 
 | Parâmetro | Valores |
 | --- | --- |
@@ -46,52 +37,53 @@ Após preparar a VM de carga, carregar a base e validar os coletores e hooks, ex
 | Usuários virtuais | 25, 50, 100, 250, 500 |
 | Modos | Cache desligado e ligado |
 | Repetições | 5 por combinação |
-| Total | 200 execuções, organizadas em 100 pares |
+| Total | 200 execuções, em 100 pares e 20 blocos |
 
-Cada par usa o mesmo conjunto de dados, empresas, pedidos de escrita, páginas de referência, semente e parâmetros. A ordem dos modos é aleatorizada e registrada no plano. A semente torna a seleção de operações reproduzível; por ser uma carga de usuários concorrentes com duração fixa, não garante o mesmo total de requisições ou intercalação entre os modos.
+Cada par usa a mesma base, empresas, pedidos, páginas de referência, semente e parâmetros. A ordem dos modos é aleatorizada no plano. O protocolo 2 reutiliza a ordem e as sementes originais, mas recomeça todas as medições com a API revisada.
 
-Os sete minutos de cada execução somam no mínimo 23h20. Restauração, início dos serviços, drenagem, verificação e exportação acrescentam tempo. Fixe também o ritmo da carga e os limites de erro antes do piloto e preserve-os na campanha.
+A carga mantém usuários concorrentes constantes, sem pausa programada entre operações. Cada grupo completo de 100 tentativas por usuário contém a proporção planejada; o último pode ficar incompleto. A semente reproduz decisões, não o total nem a intercalação das requisições. Recusas continuam sendo tentativas do perfil; não há repetição automática para forçar seu sucesso. O próximo PATCH mantém o estado desejado até uma confirmação válida, garantindo que a próxima escrita confirmada alterne o estado.
+
+São no mínimo 23h20 de aquecimento/medição; restauração, drenagem, início dos serviços e exportação acrescentam tempo. Matriz, ritmo, limites e tratamento de falhas permanecem fixos durante toda a campanha.
 
 ## Preparação de cada execução
 
-1. Pare a geração de carga e espere terminar todas as requisições anteriores.
-2. Restaure uma cópia da mesma base de referência no banco experimental isolado. Confira o resultado antes de prosseguir.
-3. Selecione o modo da API; mantenha a imagem e todas as outras configurações constantes. Espere a API ficar pronta.
-4. Limpe fisicamente o banco Redis dedicado ao experimento, antes do aquecimento. Mudar apenas o namespace não libera páginas antigas e não estabelece a mesma condição inicial de memória e expulsões.
-5. Verifique os coletores, os relógios e as referências de empresas e pedidos.
-6. Execute o aquecimento somente com leituras. Drene suas requisições antes da janela de medição.
-7. Registre os contadores iniciais, execute os 300 s de medição e drene as requisições finais antes dos contadores finais.
-8. Guarde os arquivos originais, o plano e a identificação dos artefatos; encerre os coletores.
+1. Encerre a carga anterior e espere as requisições terminarem.
+2. Restaure o mesmo backup no banco isolado `tcc_experimento` e confira base e manifesto.
+3. Selecione o modo do cache; preserve a imagem e todas as demais configurações. Aguarde a API pronta.
+4. Esvazie fisicamente o Redis dedicado antes do aquecimento, inclusive no modo sem cache. Mudar somente o namespace preservaria memória e estatísticas anteriores.
+5. Confira coletores, relógios, empresas e pedidos reservados para escrita.
+6. Aqueça somente com leituras e drene as requisições antes da medição.
+7. Capture contadores iniciais, execute 300 s e drene as requisições finais antes dos contadores finais.
+8. Encerre os coletores e preserve logs, dados brutos, resumos e recibos.
 
-Backup, restauração, limpeza Redis e seleção do modo são integrações explícitas do executor. Os [hooks das VMs](../infra/experiment/README.md) usam sessões temporárias autenticadas manualmente e o banco dedicado `tcc_experimento`. A restauração foi validada em uma cópia independente antes do piloto. O executor recusa hooks ausentes e interrompe a execução diante de falhas; os [contratos](../load/hooks.example/README.md) permanecem como referência para outros ambientes.
+Os [hooks das VMs](../infra/experiment/README.md) executam essas etapas em sessões temporárias autenticadas manualmente. A restauração foi validada separadamente. O banco original `tcc` permanece fora desse escopo.
 
-## Coleta e limites de atribuição
+## Erros e validade
 
-`monitoring/coletar.py` deve ser executado localmente em cada VM de serviço, com acesso ao Docker local. Ele coleta recursos do contêiner, estatísticas SQL, `INFO` Redis ou métricas HTTP, conforme o serviço selecionado. As conexões administrativas ficam fora da carga medida.
+Somente o HTTP 503 com tipo `urn:tcc:problem:database-capacity`, código `DATABASE_CAPACITY_EXCEEDED` e `operationApplied=false` comprova recusa pela admissão antes da transação. Conta como erro e recusa, sem invalidar automaticamente a medição. Não representa escrita aplicada nem sucesso.
+
+Timeout, 500, 503 genérico ou corpo de escrita inválido mantêm resultado incerto: interrompa, preserve a tentativa e repita ambos os modos do par após nova restauração. HTTP 200 de leitura fora do contrato também interrompe; outros erros HTTP de leitura permanecem como desfechos da carga. Falha de preparação, coleta, relógio ou integridade, mudança dos recursos fixados e falta de espaço invalidam a execução.
+
+O uso de recursos da geradora também é registrado; indícios de gargalo nela exigem revisão antes de continuar. Uma medição completa de saturação da aplicação pode ser válida e conter erros. Validade do procedimento não significa desempenho aceitável. O executor exige protocolo/schema 2, contadores coerentes e ausência de escrita incerta; dados anteriores não são combinados com os novos.
+
+## Coleta e consolidação
 
 | Medida | Fonte e tratamento |
 | --- | --- |
-| Latência média, mediana, p95 e p99 | k6, separando leitura e escrita; aquecimento excluído |
-| Vazão e erros | k6, separando operações e requisições totais |
-| CPU e memória | Docker de cada serviço; recortar pela janela de medição de 300 s |
-| Consultas ao banco | Diferenças de `pg_stat_statements` filtradas pelo usuário `tcc_app` |
-| Acertos, faltas e fallback das páginas | Contadores Micrometer da API; diferenças entre as coletas de início e fim |
-| Memória e expulsões Redis | `INFO memory` e diferenças de `INFO stats` |
+| Média, mediana, p95 e p99 | k6; leitura/escrita separadas, com latências de sucesso próprias |
+| Vazão | k6; tentativas e sucessos por segundo separados |
+| Erros e recusas | k6; leitura/escrita e recusas de admissão identificadas |
+| CPU e memória dos serviços | Docker; somente a janela de 300 s |
+| Consultas ao banco | Deltas de `pg_stat_statements`, filtrados pela role `tcc_app` |
+| Acertos, faltas e fallback de páginas | Deltas de contadores Micrometer da API |
+| Memória e expulsões Redis | `INFO memory` e deltas de `INFO stats` |
 
-Hits/misses internos Redis incluem buscas auxiliares de geração e não medem diretamente páginas atendidas pela aplicação. Registre-os separadamente; calcule o acerto lógico como `hit / (hit + miss + fallback)`, indicando também a proporção de fallback separadamente. Uma falta lógica pode terminar em erro HTTP, por isso preserve as duas medidas.
+O monitoramento roda localmente em cada VM, com conexões administrativas fora da carga. A API expõe somente `health` e `metrics` na porta administrativa 8081, restrita ao loopback. A role PostgreSQL de monitoramento não escreve nas tabelas de negócio. As estatísticas SQL são filtradas desde a restauração atual, sem zerar contadores globais.
 
-A API fornece somente `health` e `metrics` na porta administrativa 8081, publicada no loopback da VM. Não exponha essa porta para o gerador ou a rede de usuários. O coletor PostgreSQL usa uma role de monitoramento, sem permissões de escrita nas tabelas de negócio.
+Contadores precisam de amostras antes da medição e depois da drenagem. Recursos são amostrados a cada 5 s; a resolução não permite atribuição ao milissegundo. Relógios devem estar sincronizados. Ausência de fronteiras, reinício ou reset invalida a coleta. `monitoring/resumir.py` exige `--measurement-summary` para recortar a janela experimental; o escopo `collection` não serve como resultado de medição.
 
-Mantenha os relógios sincronizados e registre desvios observados. Os contadores devem ser capturados com a carga quiescente antes da medição e após sua drenagem; o coletor amostra recursos periodicamente, por padrão a cada 5 s. Essa resolução não permite atribuir amostras ao milissegundo. Preserve margens sem carga e os horários reais; se houver ausência de amostras de fronteira ou reinício/reset de contadores, invalide a coleta e repita a execução.
+Calcule o acerto lógico como `hit / (hit + miss + fallback)` e apresente fallback separadamente. Uma falta pode terminar em erro HTTP. Hits/misses internos do Redis incluem comandos auxiliares e não equivalem ao acerto de páginas. Total de SQL também não equivale ao total de leituras HTTP.
 
-Ao resumir a coleta com `monitoring/resumir.py`, forneça `--measurement-summary` com o resumo k6 da medição para recortar os 300 s. Sem esse argumento, o resultado tem escopo `collection` e inclui a coleta inteira; não o use como resultado da janela experimental. Com a janela, o escopo identifica recursos recortados e contadores delimitados por amostras anteriores/posteriores à carga.
+Consolide cinco repetições por perfil, concorrência, modo e operação, preservando valores individuais, média, mediana e desvio-padrão amostral. Compare cada par e calcule variação percentual somente com denominadores válidos. p95/p99 resumidos por execução não são percentis de todas as requisições reunidas. Se não houver sucesso, sua latência é ausente; não atribua zero. A consolidação identifica as repetições disponíveis e usa somente pares disponíveis para essa métrica, sem substituir as cinco execuções obrigatórias.
 
-Não zere estatísticas globais PostgreSQL durante a campanha. Os deltas permitem comparar consultas da API sem contabilizar o próprio monitoramento; total de consultas SQL e quantidade de leituras HTTP são grandezas distintas.
-
-## Consolidação
-
-Consolide por perfil, concorrência, modo e tipo de operação. Calcule média, mediana e desvio-padrão dos indicadores das cinco execuções, preserve os valores individuais e compare cada par com a respectiva referência sem cache. Calcule a variação percentual somente com denominador válido e explicite a direção de melhoria de cada métrica.
-
-p95 e p99 consolidados a partir dos percentis individuais são resumos das execuções, não percentis de todas as requisições reunidas. Não elimine falhas ou execuções incompletas silenciosamente. Dados ausentes, reinícios, erros de preparação e quebras do protocolo tornam a execução inválida e devem permanecer registrados.
-
-Antes de iniciar a campanha, registre commit, digests, versões efetivas, recursos, tamanhos da base e índices, pool, paginação, localidade, TTL, timeout, semente e ordem. Consulte [VERSIONS.md](../VERSIONS.md), [registro das VMs](../infra/DEPLOYMENT.md) e [ajustes do texto](AJUSTES_TEXTO_TCC.md).
+Arquive tentativas incompletas e não as elimine silenciosamente. Registre código, digests, versões efetivas, recursos, base, índices, pool, admissão, TTL, timeout, sementes e ordem. Consulte [VERSIONS.md](../VERSIONS.md), [DEPLOYMENT.md](../infra/DEPLOYMENT.md) e [REVISAO_CAPACIDADE.md](REVISAO_CAPACIDADE.md).

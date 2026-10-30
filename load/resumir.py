@@ -8,6 +8,7 @@ from collections import defaultdict
 from pathlib import Path
 
 from executar import validate_monitoring
+from outcomes import COUNTERS, SUCCESS_LATENCY_PREFIXES, validate_outcomes
 
 
 def statistics_for(values):
@@ -34,9 +35,11 @@ def flatten_numeric(value, prefix=''):
 
 def run_metrics(directory, summary):
     metrics = {}
-    for name in ('reads', 'writes', 'requests', 'errors', 'read_errors', 'write_errors',
-                 'throughput_requests_per_second', 'error_ratio', 'observed_write_ratio',
-                 'read_latency_ms', 'write_latency_ms'):
+    for name in COUNTERS + (
+            'throughput_requests_per_second', 'successful_requests_per_second',
+            'successful_read_requests_per_second', 'successful_write_requests_per_second',
+            'error_ratio', 'observed_write_ratio', 'read_latency_ms', 'write_latency_ms',
+            'read_success_latency_ms', 'write_success_latency_ms'):
         metrics.update(flatten_numeric(summary.get(name), name))
     monitoring_paths = [directory / 'monitoring' / f'{service}-summary.json' for service in ('app', 'postgres', 'redis')]
     present = [path.is_file() for path in monitoring_paths]
@@ -88,6 +91,7 @@ def load_runs(results_directory):
         completed = summary.get('measurement_completed_unix_ms', 0)
         if summary.get('nominal_measurement_seconds') != 300 or end - start != 300000 or completed < end:
             raise ValueError(f'Janela de medição incompatível em {directory}.')
+        validate_outcomes(summary)
         for name in ('run_id', 'profile', 'virtual_users', 'seed', 'cache_mode'):
             if run[name] != summary.get(name):
                 raise ValueError(f'Resumo diverge de run.json: {directory}/{name}.')
@@ -113,13 +117,18 @@ def consolidate(runs):
     groups = []
     pairs = []
     for (profile, users, mode), repetitions in sorted(grouped.items()):
-        names = set.intersection(*(set(result['metrics']) for result in repetitions.values()))
-        if any(set(result['metrics']) != names for result in repetitions.values()):
+        common_names = set.intersection(*(set(result['metrics']) for result in repetitions.values()))
+        names = set.union(*(set(result['metrics']) for result in repetitions.values()))
+        if any(not name.startswith(SUCCESS_LATENCY_PREFIXES) for name in names - common_names):
             raise ValueError(f'{profile}/{users}/{mode}: métricas diferentes entre repetições.')
         groups.append({
             'profile': profile, 'virtual_users': users, 'cache_mode': mode,
-            'metrics': {name: statistics_for([repetitions[index]['metrics'][name] for index in range(1, 6)])
+            'metrics': {name: statistics_for([repetitions[index]['metrics'][name] for index in range(1, 6)
+                                            if name in repetitions[index]['metrics']])
                         for name in sorted(names)},
+            'metrics_missing_repetitions': {name: [index for index in range(1, 6)
+                                                  if name not in repetitions[index]['metrics']]
+                                            for name in sorted(names - common_names)},
         })
     scenarios = sorted({(profile, users) for profile, users, mode in grouped})
     for profile, users in scenarios:
@@ -134,25 +143,32 @@ def consolidate(runs):
                 raise ValueError('Resultados não pareados por semente e identificador.')
             if left['completion'] != right['completion']:
                 raise ValueError('Resultados pareados usam backups ou manifestos diferentes.')
-        names = set.intersection(*(set(result['metrics']) for result in list(on.values()) + list(off.values())))
+        names = set.union(*(set(result['metrics']) for result in list(on.values()) + list(off.values())))
         paired_metrics = {}
         for name in sorted(names):
-            differences = [on[index]['metrics'][name] - off[index]['metrics'][name] for index in range(1, 6)]
+            available = [index for index in range(1, 6) if name in on[index]['metrics'] and name in off[index]['metrics']]
+            differences = [on[index]['metrics'][name] - off[index]['metrics'][name] for index in available]
             percentages = [100 * (on[index]['metrics'][name] - off[index]['metrics'][name]) / off[index]['metrics'][name]
-                           for index in range(1, 6) if off[index]['metrics'][name] != 0]
+                           for index in available if off[index]['metrics'][name] != 0]
             paired_metrics[name] = {
-                'difference_on_minus_off': statistics_for(differences),
-                'percent_on_minus_off_over_off': statistics_for(percentages) if len(percentages) == 5 else None,
-                'percent_unavailable_reason': 'baseline_zero' if len(percentages) < 5 else None,
+                'difference_on_minus_off': statistics_for(differences) if differences else None,
+                'percent_on_minus_off_over_off': statistics_for(percentages) if available and len(percentages) == len(available) else None,
+                'missing_repetitions': [index for index in range(1, 6) if index not in available],
+                'percent_unavailable_reason': 'no_paired_observations' if not available
+                    else 'baseline_zero' if len(percentages) < len(available) else None,
             }
-        unpaired = set(on[1]['metrics']) ^ set(off[1]['metrics'])
+        unpaired = {name for name in names if any(name not in on[index]['metrics'] or name not in off[index]['metrics']
+                                                for index in range(1, 6))}
         pairs.append({'profile': profile, 'virtual_users': users, 'metrics': paired_metrics,
                       'metrics_unavailable_in_one_mode': sorted(unpaired)})
     return {
-        'schema_version': 1,
+        'schema_version': 2,
+        'protocol_version': 2,
         'scope': 'five_repetitions_per_mode_and_paired_differences',
         'percent_definition': '100 * (cache_on - cache_off) / cache_off, calculado por par antes de resumir',
         'latency_note': 'A média dos p95/p99 das repetições não é o percentil global das requisições.',
+        'success_latency_note': 'Latências de sucesso ficam ausentes nas repetições sem sucesso; n informa as observações disponíveis. Diferenças usam somente pares disponíveis.',
+        'throughput_note': 'throughput_requests_per_second conta tentativas; successful_requests_per_second conta somente sucessos.',
         'monitoring_note': 'CPU/memória: estatísticas por execução; contadores: deltas delimitados pelas amostras externas à janela.',
         'groups': groups,
         'pairs': pairs,
