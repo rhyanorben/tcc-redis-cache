@@ -85,6 +85,7 @@ def main():
     group.add_argument('--consolidar', action='store_true')
     group.add_argument('--recolher', type=int, choices=range(1, 21))
     group.add_argument('--piloto', action='store_true', help='Executa somente o piloto de capacidade, fora dos resultados da campanha.')
+    group.add_argument('--piloto-leitura', action='store_true', help='Confere a capacidade em 100/0 com cache e 500 VUs, fora da campanha.')
     arguments = parser.parse_args()
     numbers = arguments.blocos or ([arguments.bloco or arguments.recolher] if arguments.bloco or arguments.recolher else [])
     if not os.environ.get('TMUX'):
@@ -95,6 +96,8 @@ def main():
         environment = dict(os.environ, TCC_SLEEP_GUARD='1')
         raise SystemExit(subprocess.call(['systemd-inhibit', '--what=sleep', '--mode=block', '--why=Campanha do TCC em execução', sys.executable, str(Path(__file__).resolve()), *sys.argv[1:]], env=environment))
     local = PROJECT / 'results' / Path(CONFIG['campaign']).name
+    if arguments.piloto_leitura:
+        local = local / 'piloto-leitura-v3'
     local.mkdir(parents=True, exist_ok=True)
     destination = CONFIG['ssh_user'] + '@' + CONFIG['load_host']
     token = secrets.token_hex(16)
@@ -123,9 +126,13 @@ def main():
                 time.sleep(2)
             action = 'executar' if arguments.bloco or arguments.blocos else ('consolidar' if arguments.consolidar else 'verificar')
             command = ['sudo', 'python3', CONFIG['remote_project'] + '/load/blocos.py', action, '--campanha', CONFIG['campaign']]
-            if arguments.piloto:
+            if arguments.piloto or arguments.piloto_leitura:
                 command = ['sudo', 'python3', CONFIG['remote_project'] + '/scripts/piloto_capacidade.py', '--campanha', CONFIG['campaign']]
-                print('Piloto de capacidade: autentique no início. Reserve 25 minutos; os dois modos serão executados fora da campanha.', flush=True)
+                if arguments.piloto_leitura:
+                    command.append('--somente-leitura')
+                    print('Piloto somente leitura: autentique no início. Reserve 12 minutos; um caso será executado fora da campanha.', flush=True)
+                else:
+                    print('Piloto de capacidade: autentique no início. Reserve 25 minutos; os dois modos serão executados fora da campanha.', flush=True)
             if arguments.bloco:
                 command += ['--bloco', str(arguments.bloco)]
             elif arguments.blocos:
@@ -141,8 +148,8 @@ def main():
             if numbers:
                 copy_code = collect_results(destination, control, local, numbers, require_all=exit_code == 0)
                 exit_code = exit_code or copy_code
-            elif arguments.piloto:
-                remote = str(Path(CONFIG['campaign']).parent / 'piloto-capacidade-v2')
+            elif arguments.piloto or arguments.piloto_leitura:
+                remote = str(Path(CONFIG['campaign']).parent / ('piloto-leitura-v3' if arguments.piloto_leitura else 'piloto-capacidade-v3'))
                 try:
                     collect_package(destination, control, local, remote, 'piloto-capacidade.zip')
                 except (OSError, ValueError, subprocess.SubprocessError) as error:
@@ -165,7 +172,7 @@ def main():
             subprocess.run(['ssh', '-S', control, '-O', 'exit', destination], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
     print('Operação encerrada. Para acompanhar novamente: tmux attach -t ' + SESSION)
     if exit_code:
-        print('Consulte os pacotes disponíveis. ' + ('Um novo piloto repetirá os dois modos, preservando esta tentativa.' if arguments.piloto else 'Reexecute o mesmo bloco ou intervalo para retomar os pares pendentes.'))
+        print('Consulte os pacotes disponíveis. ' + ('Um novo piloto repetirá seus casos, preservando esta tentativa.' if arguments.piloto or arguments.piloto_leitura else 'Reexecute o mesmo bloco ou intervalo para retomar os pares pendentes.'))
     input('Pressione Enter para fechar este terminal de acompanhamento.')
     raise SystemExit(exit_code)
 

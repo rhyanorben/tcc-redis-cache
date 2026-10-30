@@ -1,4 +1,5 @@
 import json
+import copy
 import math
 import sys
 import tempfile
@@ -10,13 +11,14 @@ sys.path.insert(0, str(LOAD))
 from outcomes import validate_outcomes
 from resumir import consolidate, load_runs
 from test_load import results_fixture
+from planejar import NAVIGATION
 
 
 def latency():
     return {'avg': 50, 'min': 20, 'med': 40, 'max': 90, 'p(95)': 80, 'p(99)': 89}
 
 
-def summary_fixture():
+def summary_fixture(protocol_version=2):
     summary = {
         'schema_version': 2, 'protocol_version': 2,
         'scope': 'measurement_only', 'valid': True, 'valid_for_campaign': True, 'smoke_test': False,
@@ -32,6 +34,14 @@ def summary_fixture():
         'read_success_latency_ms': latency(), 'write_success_latency_ms': latency(),
     }
     update_rates(summary)
+    summary['protocol_version'] = protocol_version
+    if protocol_version == 3:
+        summary['navigation'] = {
+            'config': copy.deepcopy(NAVIGATION), 'forward_visits': 1, 'reverse_visits': 0,
+            'reads': {'first': 10, 'intermediate': 0, 'last': 0},
+            'errors': {'first': 2, 'intermediate': 0, 'last': 0},
+            'latency_ms': {'first': latency(), 'intermediate': None, 'last': None},
+        }
     return summary
 
 

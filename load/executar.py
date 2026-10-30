@@ -9,7 +9,7 @@ import sys
 from pathlib import Path
 from urllib.parse import urlparse
 
-from planejar import K6_IMAGE, PROFILES, VIRTUAL_USERS
+from planejar import K6_IMAGE, NAVIGATION, PROFILES, PROTOCOL_VERSION, VIRTUAL_USERS
 from outcomes import validate_outcomes
 
 HOOKS = ('restore', 'mode', 'clear', 'verify', 'monitor-start', 'monitor-stop')
@@ -27,6 +27,8 @@ def file_hash(path):
 def validate_plan(plan, manifest_path):
     if plan.get('schema_version') != 1 or plan.get('k6_image') != K6_IMAGE:
         raise ValueError('Plano ou imagem k6 incompatíveis.')
+    if plan.get('protocol_version') != PROTOCOL_VERSION or plan.get('navigation') != NAVIGATION:
+        raise ValueError('Plano de outro protocolo ou navegação; prepare uma campanha nova de paginação v3.')
     if plan.get('active_companies') != 25 or plan.get('warmup_seconds') != 120 or plan.get('measurement_seconds') != 300:
         raise ValueError('Tempos ou empresas ativas incompatíveis.')
     if file_hash(manifest_path) != plan.get('manifest_sha256'):
@@ -173,6 +175,10 @@ def run_k6(root, run_directory, manifest_path, phase, environment):
     summary = json.loads((run_directory / summary_name).read_text(encoding='utf-8'))
     if summary.get('valid') is not True or summary.get('phase') != phase:
         raise ValueError(f'Resumo k6 inválido em {phase}.')
+    if summary.get('protocol_version') != int(environment.get('PROTOCOL_VERSION', PROTOCOL_VERSION)):
+        raise ValueError('O script k6 não corresponde ao protocolo da campanha.')
+    if summary.get('navigation', {}).get('config') != NAVIGATION:
+        raise ValueError('O script k6 não confirmou a navegação configurada.')
     if phase == 'measurement' and summary.get('requests', 0) <= 0:
         raise ValueError('A medição não registrou requisições.')
     if phase == 'measurement' and summary.get('valid_for_campaign') is not True:
@@ -203,6 +209,7 @@ def execute_run(plan, run, arguments, manifest_path, backup_hash):
     environment.update({
         'RUN_ID': run['run_id'], 'RUN_DIR': str(run_directory),
         'PROFILE': run['profile'], 'VUS': str(run['virtual_users']),
+        'PROTOCOL_VERSION': str(plan['protocol_version']),
         'SEED': run['seed'], 'CACHE_MODE': run['cache_mode'],
         'BASE_URL': arguments.base_url,
         'MANIFEST_PATH': str(manifest_path), 'MANIFEST_SHA256': plan['manifest_sha256'],

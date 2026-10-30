@@ -35,7 +35,7 @@ class ManualPilotTests(unittest.TestCase):
             self.assertEqual(pair, piloto_capacidade.selected_pair(plan))
             self.assertEqual(before, json.dumps(plan))
             plan['runs'][10]['sequence'] = 13
-            with self.assertRaisesRegex(ValueError, 'posições 11 e 12'):
+            with self.assertRaisesRegex(ValueError, 'par consecutivo'):
                 piloto_capacidade.selected_pair(plan)
 
     def test_manual_pilot_authenticates_once_preserves_both_runs_and_is_outside_campaign(self):
@@ -56,7 +56,7 @@ class ManualPilotTests(unittest.TestCase):
             summarize.assert_called_once()
             self.assertEqual(plan_before, (campaign / 'plan.json').read_bytes())
             self.assertFalse((campaign / 'blocks').exists())
-            root = campaign.parent / 'piloto-capacidade-v2'
+            root = campaign.parent / 'piloto-capacidade-v3'
             state = piloto_capacidade.blocos.read(next(root.glob('tentativa-*/pilot.json')))
             self.assertEqual('complete', state['status'])
             self.assertFalse(state['eligible_for_campaign'])
@@ -83,7 +83,7 @@ class ManualPilotTests(unittest.TestCase):
                 execute.reset_mock(side_effect=True)
                 piloto_capacidade.execute_pilot(campaign, 'token')
                 self.assertEqual(pair, [call.args[1] for call in execute.call_args_list])
-            root = campaign.parent / 'piloto-capacidade-v2'
+            root = campaign.parent / 'piloto-capacidade-v3'
             states = [piloto_capacidade.blocos.read(path) for path in sorted(root.glob('tentativa-*/pilot.json'))]
             self.assertEqual(['interrupted', 'complete'], [state['status'] for state in states])
             self.assertTrue(all(state['eligible_for_campaign'] is False for state in states))
@@ -98,10 +98,40 @@ class ManualPilotTests(unittest.TestCase):
                     piloto_capacidade.execute_pilot(campaign, 'token')
             execute.assert_not_called()
             close.assert_called_once()
-            self.assertTrue((campaign.parent / 'piloto-capacidade-v2/exports/piloto-capacidade.zip').exists())
+            self.assertTrue((campaign.parent / 'piloto-capacidade-v3/exports/piloto-capacidade.zip').exists())
+
+    def test_read_only_capacity_uses_cached_case_and_keeps_both_pilots_separate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            campaign, mixed_pair = self.fixture(Path(temporary))
+            plan = piloto_capacidade.blocos.read(campaign / 'plan.json')
+            read_pair = [dict(run, profile='100-0', run_id=run['run_id'].replace('90-10', '100-0'),
+                              pair_id='100-0-vu500-r4', sequence=21 + index) for index, run in enumerate(mixed_pair)]
+            plan['runs'][20:22] = read_pair
+            piloto_capacidade.blocos.write(campaign / 'plan.json', plan)
+            with patch.dict(piloto_capacidade.CONFIG, {'campaign': str(campaign)}), patch.object(piloto_capacidade.blocos, 'session_start', return_value=Mock()), patch.object(piloto_capacidade.blocos, 'session_stop'), patch.object(piloto_capacidade.blocos, 'preflight', return_value={}), patch.object(piloto_capacidade, 'Resources'), patch.object(piloto_capacidade.executar, 'execute_run') as execute, patch.object(piloto_capacidade.blocos, 'summarize_generator'):
+                piloto_capacidade.execute_pilot(campaign, 'token', read_only=True)
+            execute.assert_called_once()
+            self.assertEqual(read_pair[0], execute.call_args.args[1])
+            self.assertFalse((campaign / 'blocks').exists())
+            self.assertFalse((campaign.parent / 'piloto-capacidade-v3').exists())
+            root = campaign.parent / 'piloto-leitura-v3'
+            state = piloto_capacidade.blocos.read(next(root.glob('tentativa-*/pilot.json')))
+            self.assertEqual('read-only-generator-capacity', state['purpose'])
+            self.assertTrue(state['excluded_from_campaign'])
+            self.assertEqual([read_pair[0]], state['runs'])
 
 
 class PilotLauncherTests(unittest.TestCase):
+    def test_read_only_switch_keeps_remote_and_local_packages_separate(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            with patch.object(executar_bloco, 'PROJECT', Path(temporary)), patch.dict(os.environ, {'TMUX': 'test', 'TCC_SLEEP_GUARD': '1'}), patch.object(sys, 'argv', ['executar_bloco.py', '--piloto-leitura']), patch.object(executar_bloco.subprocess, 'run'), patch.object(executar_bloco.subprocess, 'Popen', return_value=Mock()), patch.object(executar_bloco.subprocess, 'call', return_value=0) as call, patch.object(executar_bloco.threading, 'Thread', return_value=Mock()), patch.object(executar_bloco.time, 'sleep'), patch.object(executar_bloco, 'collect_package') as collect, patch('builtins.input'):
+                with self.assertRaises(SystemExit) as result:
+                    executar_bloco.main()
+            self.assertEqual(0, result.exception.code)
+            self.assertIn('--somente-leitura', call.call_args.args[0][-1])
+            self.assertTrue(collect.call_args.args[-2].endswith('/results/piloto-leitura-v3'))
+            self.assertEqual('piloto-leitura-v3', collect.call_args.args[2].name)
+
     def test_manual_switch_routes_to_pilot_and_copies_package_even_after_failure(self):
         with tempfile.TemporaryDirectory() as temporary:
             with patch.object(executar_bloco, 'PROJECT', Path(temporary)), patch.dict(os.environ, {'TMUX': 'test', 'TCC_SLEEP_GUARD': '1'}), patch.object(sys, 'argv', ['executar_bloco.py', '--piloto']), patch.object(executar_bloco.subprocess, 'run'), patch.object(executar_bloco.subprocess, 'Popen', return_value=Mock()), patch.object(executar_bloco.subprocess, 'call', return_value=108) as call, patch.object(executar_bloco.threading, 'Thread', return_value=Mock()), patch.object(executar_bloco.time, 'sleep'), patch.object(executar_bloco, 'collect_package') as collect, patch.object(executar_bloco, 'collect_results') as blocks, patch('builtins.input'):
@@ -113,7 +143,7 @@ class PilotLauncherTests(unittest.TestCase):
             self.assertIn('--host-token', command)
             self.assertNotIn('/load/blocos.py', command)
             self.assertEqual('piloto-capacidade.zip', collect.call_args.args[-1])
-            self.assertTrue(collect.call_args.args[-2].endswith('/results/piloto-capacidade-v2'))
+            self.assertTrue(collect.call_args.args[-2].endswith('/results/piloto-capacidade-v3'))
             blocks.assert_not_called()
 
 

@@ -2,14 +2,14 @@
 
 Experimento de Engenharia de Computação que compara a mesma aplicação com PostgreSQL e com cache-aside Redis. Uma instância atende várias empresas; a operação avaliada é a **listagem paginada de pedidos de uma empresa**.
 
-A revisão de 24/10/2026 está implantada. Comece pelo [piloto manual e pela campanha em 20 blocos](docs/CAMPANHA_EM_BLOCOS.md); os resultados anteriores permanecem separados.
+A campanha do protocolo 2 foi concluída em 20 blocos. A [paginação por visitas do protocolo 3](docs/PAGINACAO_V3.md) está instalada na tcc-load, com plano novo e [pilotos aprovados em 30/10/2026](docs/VALIDACAO_PAGINACAO_V3.md). Os novos blocos ainda não foram iniciados. A API e a infraestrutura permanecem iguais.
 
 ## Estado atual
 
 - API implementada com empresa, cliente, pedido e item_pedido.
 - API implantada em 20/10/2026, com migração V1, usuários separados e ACL Redis da aplicação.
-- Validação funcional nas VMs aprovada nos modos sem cache e com cache; atualmente o cache está habilitado, com TTL de 60 s e limite Redis de 1 GiB.
-- Revisão de capacidade: 50 testes Java e 116 Python aprovados, além das duas suítes JavaScript. A conferência sem carga e uma consulta pela Ethernet passaram; o piloto com 500 usuários aguarda execução manual.
+- Validação funcional nas VMs aprovada nos modos sem cache e com cache. O modo é selecionado a cada execução, com TTL de 60 s e limite Redis de 1 GiB.
+- Pilotos do protocolo 3 aprovados com 500 usuários: 90/10 nos dois modos e 100/0 com cache. Navegação, recursos, integridade dos pacotes e nove coletas dos serviços conferidos; resultados separados da campanha.
 - Ethernet do computador 1 e segunda NIC da tcc-app configuradas em 21/10; comunicação e GET HTTP a partir da tcc-load confirmados.
 - Base completa de 8.500.100 registros carregada em `tcc_experimento`; backup restaurado e conferido. Automação com autenticação manual e piloto 90/10 com 25 usuários validados; veja o [registro da preparação e do piloto](docs/PREPARACAO_E_PILOTO.md).
 
@@ -19,7 +19,7 @@ A revisão de 24/10/2026 está implantada. Comece pelo [piloto manual e pela cam
 | tcc-postgres | 10.10.10.20 | PostgreSQL |
 | tcc-redis | 10.10.10.30 | Redis |
 
-O [registro das VMs](infra/DEPLOYMENT.md) preserva o histórico e descreve a implantação de 20/10. O banco `tcc` preserva os dados da validação funcional anterior. A API experimental usa `tcc_experimento`, selecionado por uma sobreposição Compose. Backups, restauração, seleção do modo e coleta são coordenados pelos [hooks das VMs](infra/experiment/README.md). A campanha completa ainda não foi executada.
+O [registro das VMs](infra/DEPLOYMENT.md) preserva o histórico e descreve a implantação de 20/10. O banco `tcc` preserva os dados da validação funcional anterior. A API experimental usa `tcc_experimento`, selecionado por uma sobreposição Compose. Backups, restauração, seleção do modo e coleta são coordenados pelos [hooks das VMs](infra/experiment/README.md). A nova campanha usa `campanha-paginacao-v3`; os resultados da campanha 2 permanecem separados.
 
 ## Desenvolvimento
 

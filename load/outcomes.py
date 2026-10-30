@@ -1,5 +1,7 @@
 import math
 
+from planejar import NAVIGATION
+
 
 SUCCESS_LATENCY_PREFIXES = ('read_success_latency_ms.', 'write_success_latency_ms.')
 COUNTERS = (
@@ -11,8 +13,8 @@ COUNTERS = (
 
 
 def validate_outcomes(summary):
-    if summary.get('schema_version') != 2 or summary.get('protocol_version') != 2:
-        raise ValueError('Resumo exige schema e protocolo 2; não misture campanhas anteriores.')
+    if summary.get('schema_version') != 2 or summary.get('protocol_version') not in (2, 3):
+        raise ValueError('Resumo exige schema 2 e protocolo 2 ou 3; não misture campanhas.')
     for name in COUNTERS:
         value = summary.get(name)
         if type(value) is not int or value < 0:
@@ -38,7 +40,7 @@ def validate_outcomes(summary):
         raise ValueError('Falha incerta ou violação de contrato impede consolidar a execução.')
     seconds = summary.get('nominal_measurement_seconds')
     if seconds != 300:
-        raise ValueError('Protocolo 2 exige medição de 300 segundos.')
+        raise ValueError('A campanha exige medição de 300 segundos.')
     rates = {
         'throughput_requests_per_second': summary['requests'] / seconds,
         'successful_requests_per_second': summary['successes'] / seconds,
@@ -67,3 +69,36 @@ def validate_outcomes(summary):
             raise ValueError(f'Latência ausente ou incompleta: {name}.')
         if any(type(values[key]) not in (int, float) or not math.isfinite(values[key]) or values[key] < 0 for key in required):
             raise ValueError(f'Latência inválida: {name}.')
+    if summary['protocol_version'] == 3:
+        validate_navigation(summary)
+
+
+def validate_navigation(summary):
+    navigation = summary.get('navigation')
+    if not isinstance(navigation, dict) or navigation.get('config') != NAVIGATION:
+        raise ValueError('Navegação ausente ou divergente do protocolo 3.')
+    for name in ('forward_visits', 'reverse_visits'):
+        if type(navigation.get(name)) is not int or navigation[name] < 0:
+            raise ValueError(f'Contador de visitas inválido: {name}.')
+    visits = navigation['forward_visits'] + navigation['reverse_visits']
+    if summary['reads'] > 0 and visits == 0:
+        raise ValueError('Leituras sem visitas registradas.')
+    for name, total in (('reads', summary['reads']), ('errors', summary['read_errors'])):
+        values = navigation.get(name)
+        if not isinstance(values, dict) or set(values) != {'first', 'intermediate', 'last'}:
+            raise ValueError(f'Classes de páginas ausentes: {name}.')
+        if any(type(value) is not int or value < 0 for value in values.values()) or sum(values.values()) != total:
+            raise ValueError(f'Contadores por classe de página incompatíveis: {name}.')
+    if visits > navigation['reads']['first']:
+        raise ValueError('Toda visita precisa iniciar com uma leitura da primeira página.')
+    for name in ('first', 'intermediate', 'last'):
+        if navigation['errors'][name] > navigation['reads'][name]:
+            raise ValueError('Erros de páginas excedem as leituras.')
+        values = navigation.get('latency_ms', {}).get(name)
+        if navigation['reads'][name] == 0:
+            if values is not None:
+                raise ValueError('Latência por página sem leituras correspondentes.')
+        elif not isinstance(values, dict) or any(
+                type(values.get(key)) not in (int, float) or not math.isfinite(values[key]) or values[key] < 0
+                for key in ('avg', 'min', 'med', 'max', 'p(95)', 'p(99)')):
+            raise ValueError('Latência por classe de página ausente ou inválida.')

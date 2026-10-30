@@ -57,6 +57,8 @@ def split_blocks(plan):
 def prepare(root, plan_path, manifest):
     plan = read(plan_path)
     executar.validate_plan(plan, manifest)
+    if CONFIG['protocol_version'] != plan['protocol_version']:
+        raise ValueError('A configuração não corresponde ao protocolo do plano.')
     blocks = split_blocks(plan)
     root.mkdir(parents=True, exist_ok=False)
     shutil.copy2(manifest, root / 'manifesto.json')
@@ -65,7 +67,7 @@ def prepare(root, plan_path, manifest):
     write(root / 'blocos.json', [{'block': index, 'runs': [run['run_id'] for run in block], 'minimum_minutes': 70, 'estimated_minutes': [80, 105]} for index, block in enumerate(blocks, 1)])
     write(root / 'campaign.json', {'created_at': datetime.now(timezone.utc).isoformat(), 'protocol_version': CONFIG['protocol_version'],
           'app_image': CONFIG['app_image'], 'supersedes': CONFIG['supersedes'], 'backup_sha256': CONFIG['backup_sha256'],
-          'source_hashes': fingerprint(), 'pilot_included': False})
+          'navigation': plan['navigation'], 'source_hashes': fingerprint(), 'pilot_included': False})
     print('20 blocos preparados; nenhum ensaio iniciado.')
 
 
@@ -107,6 +109,8 @@ def validate_pair(directory, pair):
             summary = read(case / 'measurement-summary.json')
             if not summary.get('valid_for_campaign') or summary['nominal_measurement_seconds'] != 300:
                 return False
+            if summary.get('protocol_version') != CONFIG['protocol_version']:
+                return False
             validate_outcomes(summary)
             executar.validate_monitoring(case, summary)
         return True
@@ -120,6 +124,8 @@ def preflight(root, token):
     metadata = read(root / 'campaign.json')
     if metadata.get('protocol_version') != CONFIG['protocol_version'] or metadata.get('app_image') != CONFIG['app_image']:
         raise ValueError('A campanha pertence a outro protocolo ou imagem da API; não misturar resultados')
+    if metadata.get('navigation') != plan['navigation']:
+        raise ValueError('A campanha pertence a outra configuração de navegação')
     if metadata['source_hashes'] != fingerprint():
         raise ValueError('Os scripts mudaram após preparar a campanha; não misturar versões')
     if executar.file_hash(Path(CONFIG['backup'])) != CONFIG['backup_sha256']:

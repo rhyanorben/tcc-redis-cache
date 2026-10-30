@@ -1,12 +1,12 @@
 {
-  "campaign": "/home/rhyan/tcc-runner-v2/results/campanha-20261024-v2",
+  "campaign": "/home/rhyan/tcc-runner-v3/results/campanha-paginacao-v3",
   "load_host": "10.20.20.40",
   "ssh_user": "rhyan",
-  "remote_project": "/home/rhyan/tcc-runner-v2",
-  "protocol_version": 2,
-  "terminal_session": "tcc-campanha-v2",
+  "remote_project": "/home/rhyan/tcc-runner-v3",
+  "protocol_version": 3,
+  "terminal_session": "tcc-campanha-v3",
   "app_image": "sha256:70865bd0ecd794ff423ea6a709090d853359016743b64111a7caaf7ea4fb9d9d",
-  "supersedes": "/home/rhyan/tcc-runner/results/campanha-20261023",
+  "supersedes": "/home/rhyan/tcc-runner-v2/results/campanha-20261024-v2",
   "backup": "/home/rhyan/tcc-experimento/base-v1.dump",
   "backup_sha256": "84af910f36b945af6080fc8bb8df2a39835dfa388cd81689ab40483a64baa58f",
   "base_url": "http://10.20.20.10:8080"

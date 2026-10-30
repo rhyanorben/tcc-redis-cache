@@ -38,14 +38,6 @@ export function assignment(manifest, virtualUser) {
     };
 }
 
-export function pageFor(next, totalPages) {
-    const hotPages = Math.max(1, Math.floor(totalPages * 0.2));
-    if (next() < 0.8 || hotPages === totalPages) {
-        return Math.floor(next() * hotPages);
-    }
-    return hotPages + Math.floor(next() * (totalPages - hotPages));
-}
-
 export function operationFor(next, writePercent, iteration) {
     const position = iteration % 100;
     if (position === 0) {

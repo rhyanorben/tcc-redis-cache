@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import {assignment, hash, operationFor, pageFor, PROFILES, random, validateManifest} from '../workload.js';
+import {assignment, hash, operationFor, PROFILES, random, validateManifest} from '../workload.js';
 
 function manifest() {
     return {
@@ -61,19 +61,6 @@ test('cada bloco completo contém exatamente a proporção de escritas planejada
         assert.equal(operations.filter(Boolean).length, expectedWrites);
         assert.equal(operationFor(generator, expectedWrites, 1), null);
     }
-});
-
-test('80% das leituras atingem as primeiras 200 páginas e nunca saem das 1000 páginas', () => {
-    const generator = random(721);
-    let hotReads = 0;
-    for (let index = 0; index < 100000; index += 1) {
-        const page = pageFor(generator, 1000);
-        assert.ok(page >= 0 && page < 1000);
-        if (page < 200) {
-            hotReads += 1;
-        }
-    }
-    assert.ok(hotReads > 79000 && hotReads < 81000);
 });
 
 test('manifesto rejeita pedidos repetidos, fora de ABERTO ou volumes incorretos', () => {

@@ -1,0 +1,7 @@
+{
+  "model": "pagination-visits-v3",
+  "forward_visit_ratio": 0.9,
+  "minimum_reads_per_visit": 4,
+  "maximum_reads_per_visit": 8,
+  "local_return_ratio": 0.1
+}

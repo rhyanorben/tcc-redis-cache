@@ -2,7 +2,10 @@ import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import test from 'node:test';
 import vm from 'node:vm';
-import {assignment, hash, operationFor, pageFor, PROFILES, random, validateManifest} from '../workload.js';
+import {assignment, hash, operationFor, PROFILES, random, validateManifest} from '../workload.js';
+import {PaginationJourney, validateNavigation} from '../navigation.js';
+
+const navigationConfig = JSON.parse(readFileSync(new URL('../navigation.json', import.meta.url)));
 
 const source = readFileSync(new URL('../experiment.js', import.meta.url), 'utf8')
     .replace(/^import .*;\n/gm, '')
@@ -49,8 +52,8 @@ function rejection(overrides = {}) {
     }, 5000);
 }
 
-function readResponse() {
-    return response(200, {page: 0, size: 20, totalElements: 20000, totalPages: 1000, content: Array(20).fill({})});
+function readResponse(page = 0) {
+    return response(200, {page, size: 20, totalElements: 20000, totalPages: 1000, content: Array(20).fill({})});
 }
 
 function runner(responses = [], overrides = {}) {
@@ -83,11 +86,12 @@ function runner(responses = [], overrides = {}) {
     const request = (method, url, body, options) => {
         requests.push({method, url, body, options});
         assert.ok(responses.length > 0, 'Toda chamada HTTP deve ter uma resposta simulada.');
-        return responses.shift();
+        const selected = responses.shift();
+        return typeof selected === 'function' ? selected(requests.at(-1)) : selected;
     };
     const context = vm.createContext({
         __ENV: {BASE_URL: 'http://localhost:8080', CACHE_MODE: 'on', PROFILE: '90-10'},
-        open: () => JSON.stringify(manifest()),
+        open: path => JSON.stringify(path.endsWith('navigation.json') ? navigationConfig : manifest()),
         Date: class extends Date {
             static now() {
                 return currentTime;
@@ -104,7 +108,8 @@ function runner(responses = [], overrides = {}) {
         assignment,
         hash,
         operationFor,
-        pageFor: () => 0,
+        PaginationJourney,
+        validateNavigation,
         PROFILES,
         random,
         validateManifest,
@@ -135,7 +140,7 @@ test('recusa 503 exata mantém o status até uma escrita confirmada e separa os 
     assert.deepEqual(workload.requests.map(request => JSON.parse(request.body).status), ['CONFIRMADO', 'CONFIRMADO', 'CANCELADO']);
     const summary = workload.summary();
     assert.equal(summary.schema_version, 2);
-    assert.equal(summary.protocol_version, 2);
+    assert.equal(summary.protocol_version, 3);
     assert.equal(summary.valid_for_campaign, true);
     assert.equal(summary.writes, 3);
     assert.equal(summary.write_attempts, 3);
@@ -231,4 +236,56 @@ test('contrato inválido de leitura continua abortando', () => {
     const workload = runner([response(200, {page: 1})]);
     assert.throws(() => workload.readOrders(workload.windows, workload.selected, true), /viola o contrato/);
     assert.equal(workload.summary().valid_for_campaign, false);
+});
+
+test('HTTP usa a navegação regressiva e preserva as métricas por classe de página', () => {
+    class ReverseJourney extends PaginationJourney {
+        constructor(next, totalPages, config) {
+            let index = 0;
+            super(() => [0.95, 0][index++ % 2], totalPages, config);
+        }
+    }
+    const workload = runner(Array.from({length: 8}, () => request => readResponse(Number(new URL(request.url).searchParams.get('page')))), {
+        PaginationJourney: ReverseJourney,
+    });
+    for (let index = 0; index < 8; index += 1) {
+        workload.readOrders({}, workload.selected, true);
+    }
+    assert.deepEqual(workload.requests.map(request => Number(new URL(request.url).searchParams.get('page'))),
+        [0, 999, 998, 997, 0, 999, 998, 997]);
+    const summary = workload.summary();
+    assert.equal(summary.navigation.reverse_visits, 2);
+    assert.equal(summary.navigation.forward_visits, 0);
+    assert.deepEqual(summary.navigation.reads, {first: 2, intermediate: 4, last: 2});
+    assert.equal(summary.navigation.latency_ms.last.avg, 50);
+    assert.equal(summary.reads, 8);
+});
+
+test('falha de leitura mantém página e visita sem avançar silenciosamente', () => {
+    const workload = runner([response(500, {}), readResponse(0), readResponse(1)]);
+    for (let index = 0; index < 3; index += 1) {
+        workload.readOrders({}, workload.selected, true);
+    }
+    assert.deepEqual(workload.requests.map(request => Number(new URL(request.url).searchParams.get('page'))), [0, 0, 1]);
+    const summary = workload.summary();
+    assert.equal(summary.navigation.forward_visits + summary.navigation.reverse_visits, 1);
+    assert.equal(summary.navigation.errors.first, 1);
+});
+
+test('aquecimento e medição têm visitas independentes e escritas não reiniciam a navegação', () => {
+    const readCurrent = request => readResponse(Number(new URL(request.url).searchParams.get('page')));
+    const workload = runner([readCurrent, readCurrent, readCurrent, response(200, {status: 'CONFIRMADO'}), readCurrent]);
+    workload.readOrders({}, workload.selected, false);
+    workload.readOrders({}, workload.selected, false);
+    workload.readOrders({}, workload.selected, true);
+    workload.writeOrder(workload.selected);
+    workload.readOrders({}, workload.selected, true);
+    const reads = workload.requests.filter(request => request.method === 'GET');
+    assert.equal(Number(new URL(reads[0].url).searchParams.get('page')), 0);
+    assert.equal(Number(new URL(reads[2].url).searchParams.get('page')), 0);
+    assert.notEqual(Number(new URL(reads[3].url).searchParams.get('page')), 0);
+    const summary = workload.summary();
+    assert.equal(summary.reads, 2);
+    assert.equal(summary.writes, 1);
+    assert.equal(summary.navigation.forward_visits + summary.navigation.reverse_visits, 1);
 });

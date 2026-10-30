@@ -1,5 +1,8 @@
 # Protocolo experimental
 
+Este documento preserva o protocolo 2, usado na campanha concluída. A revisão atual
+altera somente a navegação e está descrita em [Paginação por visitas — protocolo 3](PAGINACAO_V3.md).
+
 O protocolo 2 compara a mesma API com cache desligado e ligado na campanha `campanha-20261024-v2`. A [revisão de capacidade](REVISAO_CAPACIDADE.md) corrige a transação externa à consulta do cache e distingue recusa anterior à escrita de falha com estado incerto. A campanha de 23/10 permanece como registro da configuração anterior, sem aproveitamento das medições na nova campanha. O [guia em blocos](CAMPANHA_EM_BLOCOS.md) apresenta os comandos.
 
 ## Condições fixas

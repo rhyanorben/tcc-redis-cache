@@ -32,7 +32,7 @@ def fake_run(plan, run, arguments, manifest, backup):
     blocos.write(directory / 'run.json', run)
     blocos.write(directory / 'complete.json', {'complete': True})
     window = {'measurement_start_unix_ms': 1000, 'measurement_end_unix_ms': 301000, 'measurement_completed_unix_ms': 302000}
-    blocos.write(directory / 'measurement-summary.json', {**summary_fixture(), 'valid_for_campaign': True, **window})
+    blocos.write(directory / 'measurement-summary.json', {**summary_fixture(3), 'valid_for_campaign': True, **window})
     for service in ('app', 'postgres', 'redis'):
         blocos.write(directory / f'monitoring/{service}-summary.json', {'scope': 'measurement_resources_with_bracketed_counters', 'service': service, 'measurement_window': window})
 
@@ -99,7 +99,7 @@ class BlocksTest(unittest.TestCase):
             window = {'measurement_start_unix_ms': 1000, 'measurement_end_unix_ms': 301000, 'measurement_completed_unix_ms': 302000}
             def k6(project, directory, manifest, phase, environment):
                 if phase == 'measurement':
-                    summary = {**summary_fixture(), 'valid_for_campaign': True, **window}
+                    summary = {**summary_fixture(3), 'valid_for_campaign': True, **window}
                     blocos.write(directory / 'measurement-summary.json', summary)
                     return summary
             def hook(path, action, environment, expected):

@@ -9,6 +9,8 @@ from pathlib import Path
 PROFILES = ('100-0', '90-10', '70-30', '50-50')
 VIRTUAL_USERS = (25, 50, 100, 250, 500)
 K6_IMAGE = 'grafana/k6:1.6.0@sha256:be2a9ceb1b6ffc573277af4157135882a6d6433968b41e858ab02c5fd5847532'
+PROTOCOL_VERSION = 3
+NAVIGATION = json.loads((Path(__file__).resolve().parent / 'navigation.json').read_text())
 
 
 def build_plan(manifest_path, seed):
@@ -39,6 +41,8 @@ def build_plan(manifest_path, seed):
             })
     return {
         'schema_version': 1,
+        'protocol_version': PROTOCOL_VERSION,
+        'navigation': dict(NAVIGATION),
         'plan_seed': seed,
         'manifest_path': str(manifest_path.resolve()),
         'manifest_sha256': hashlib.sha256(manifest_bytes).hexdigest(),

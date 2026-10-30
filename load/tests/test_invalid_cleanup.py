@@ -79,7 +79,7 @@ class AbortedTrialTests(unittest.TestCase):
                'seed': '4f3d22ebb78520f6', 'cache_mode': 'on'}
         arguments = SimpleNamespace(saida=directory, hooks=LOAD / 'hooks.vm', backup=directory / 'backup.dump',
                                     base_url='http://10.20.20.10:8080')
-        return {'manifest_sha256': 'manifest-hash'}, run, arguments
+        return {'manifest_sha256': 'manifest-hash', 'protocol_version': 3}, run, arguments
 
     def test_abort_keeps_original_invalid_cause_and_only_requests_raw_cleanup(self):
         with tempfile.TemporaryDirectory() as temporary:

@@ -2,7 +2,8 @@ import http from 'k6/http';
 import exec from 'k6/execution';
 import {sleep} from 'k6';
 import {Counter, Trend} from 'k6/metrics';
-import {assignment, hash, operationFor, pageFor, PROFILES, random, validateManifest} from './workload.js';
+import {assignment, hash, operationFor, PROFILES, random, validateManifest} from './workload.js';
+import {PaginationJourney, validateNavigation} from './navigation.js';
 
 const phase = __ENV.PHASE || 'measurement';
 const profile = __ENV.PROFILE || '100-0';
@@ -25,6 +26,8 @@ if (smokeSeconds !== 0 && (!Number.isInteger(smokeSeconds) || smokeSeconds < 1 |
 }
 const manifest = JSON.parse(open(__ENV.MANIFEST || './manifesto.json'));
 validateManifest(manifest);
+const navigationConfig = JSON.parse(open('./navigation.json'));
+validateNavigation(navigationConfig);
 const warmupMs = phase === 'full' || phase === 'warmup' ? 120000 : 0;
 const measurementMs = phase === 'warmup' ? 0 : (smokeSeconds || 300) * 1000;
 const startupMs = 3000;
@@ -44,11 +47,19 @@ const writeSuccessLatency = new Trend('measurement_write_success_duration_ms', t
 const warmupErrors = new Counter('warmup_read_errors');
 const warmupReads = new Counter('warmup_reads');
 const contractErrors = new Counter('response_contract_errors');
+const forwardVisits = new Counter('measurement_forward_visits');
+const reverseVisits = new Counter('measurement_reverse_visits');
+const pageClasses = ['first', 'intermediate', 'last'];
+const paginationReads = Object.fromEntries(pageClasses.map(name => [name, new Counter(`measurement_${name}_page_reads`)]));
+const paginationErrors = Object.fromEntries(pageClasses.map(name => [name, new Counter(`measurement_${name}_page_errors`)]));
+const paginationLatency = Object.fromEntries(pageClasses.map(name => [name, new Trend(`measurement_${name}_page_duration_ms`, true)]));
 let writeIndex = 0;
 let iteration = 0;
 let operationBlock = [];
 let workloadRandom;
 let warmupRandom;
+let measurementJourney;
+let warmupJourney;
 
 export const options = {
     scenarios: {
@@ -90,8 +101,13 @@ function databaseCapacityRejected(response) {
 }
 
 function readOrders(data, selected, measured) {
-    const generator = measured ? workloadRandom : warmupRandom;
-    const page = pageFor(generator, selected.company.total_orders / manifest.page_size);
+    initializeWorkload(selected);
+    const journey = measured ? measurementJourney : warmupJourney;
+    const navigation = journey.current();
+    const page = navigation.page;
+    if (measured && navigation.newVisit) {
+        (navigation.direction === 'forward' ? forwardVisits : reverseVisits).add(1);
+    }
     const url = `${baseUrl}/api/pedidos?page=${page}&size=20&sort=criadoEm,desc&sort=id,desc`;
     const response = http.get(url, {
         headers: {tenantId: selected.company.tenant_id},
@@ -109,6 +125,9 @@ function readOrders(data, selected, measured) {
         }
     }
     if (measured) {
+        paginationReads[navigation.pageClass].add(1);
+        paginationErrors[navigation.pageClass].add(valid ? 0 : 1);
+        paginationLatency[navigation.pageClass].add(response.timings.duration);
         readCount.add(1);
         readErrors.add(valid ? 0 : 1);
         readLatency.add(response.timings.duration);
@@ -125,6 +144,9 @@ function readOrders(data, selected, measured) {
     if (response.status === 200 && !valid) {
         contractErrors.add(1);
         exec.test.abort('Resposta HTTP 200 viola o contrato da listagem; invalide esta execução.');
+    }
+    if (valid) {
+        journey.completed();
     }
 }
 
@@ -161,6 +183,19 @@ function writeOrder(selected) {
     }
 }
 
+function initializeWorkload(selected) {
+    const virtualUser = exec.vu.idInTest;
+    if (!workloadRandom) {
+        workloadRandom = random(hash(`${seed}|measurement|${virtualUser}`));
+        warmupRandom = random(hash(`${seed}|warmup|${virtualUser}`));
+        measurementJourney = new PaginationJourney(
+            random(hash(`${seed}|navigation|measurement|${virtualUser}`)),
+            selected.company.total_orders / manifest.page_size, navigationConfig);
+        warmupJourney = new PaginationJourney(
+            warmupRandom, selected.company.total_orders / manifest.page_size, navigationConfig);
+    }
+}
+
 export default function (data) {
     const now = Date.now();
     if (now < data.workload_start_unix_ms) {
@@ -173,10 +208,7 @@ export default function (data) {
     }
     const virtualUser = exec.vu.idInTest;
     const selected = assignment(manifest, virtualUser);
-    if (!workloadRandom) {
-        workloadRandom = random(hash(`${seed}|measurement|${virtualUser}`));
-        warmupRandom = random(hash(`${seed}|warmup|${virtualUser}`));
-    }
+    initializeWorkload(selected);
     const measured = measurementMs > 0 && now >= data.measurement_start_unix_ms;
     if (!measured) {
         readOrders(data, selected, false);
@@ -211,7 +243,15 @@ export function handleSummary(data) {
     const completed = measurementMs > 0 && elapsed >= measurementMs;
     const summary = {
         schema_version: 2,
-        protocol_version: 2,
+        protocol_version: 3,
+        navigation: {
+            config: navigationConfig,
+            forward_visits: count('measurement_forward_visits'),
+            reverse_visits: count('measurement_reverse_visits'),
+            reads: Object.fromEntries(pageClasses.map(name => [name, count(`measurement_${name}_page_reads`)])),
+            errors: Object.fromEntries(pageClasses.map(name => [name, count(`measurement_${name}_page_errors`)])),
+            latency_ms: Object.fromEntries(pageClasses.map(name => [name, latency(`measurement_${name}_page_duration_ms`)])),
+        },
         scope: 'measurement_only',
         run_id: runId,
         phase,

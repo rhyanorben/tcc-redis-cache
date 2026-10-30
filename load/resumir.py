@@ -10,6 +10,8 @@ from pathlib import Path
 from executar import validate_monitoring
 from outcomes import COUNTERS, SUCCESS_LATENCY_PREFIXES, validate_outcomes
 
+OPTIONAL_LATENCY_PREFIXES = SUCCESS_LATENCY_PREFIXES + ('navigation.latency_ms.',)
+
 
 def statistics_for(values):
     return {
@@ -35,6 +37,9 @@ def flatten_numeric(value, prefix=''):
 
 def run_metrics(directory, summary):
     metrics = {}
+    navigation = summary.get('navigation', {})
+    for name in ('forward_visits', 'reverse_visits', 'reads', 'errors', 'latency_ms'):
+        metrics.update(flatten_numeric(navigation.get(name), 'navigation.' + name))
     for name in COUNTERS + (
             'throughput_requests_per_second', 'successful_requests_per_second',
             'successful_read_requests_per_second', 'successful_write_requests_per_second',
@@ -100,6 +105,8 @@ def load_runs(results_directory):
             raise ValueError(f'Repetição duplicada: {key}.')
         runs[key] = {
             'run': run, 'completion': completion,
+            'protocol_version': summary['protocol_version'],
+            'navigation_config': summary.get('navigation', {}).get('config'),
             'metrics': run_metrics(directory, summary),
         }
     if not runs:
@@ -108,6 +115,13 @@ def load_runs(results_directory):
 
 
 def consolidate(runs):
+    protocols = {result.get('protocol_version', 2) for result in runs.values()}
+    if len(protocols) != 1:
+        raise ValueError('Não misture resultados de protocolos diferentes.')
+    protocol = next(iter(protocols))
+    navigation_configs = {json.dumps(result.get('navigation_config'), sort_keys=True) for result in runs.values()}
+    if len(navigation_configs) != 1:
+        raise ValueError('Não misture configurações de navegação diferentes.')
     grouped = defaultdict(dict)
     for (profile, users, mode, repetition), result in runs.items():
         grouped[(profile, users, mode)][repetition] = result
@@ -119,7 +133,7 @@ def consolidate(runs):
     for (profile, users, mode), repetitions in sorted(grouped.items()):
         common_names = set.intersection(*(set(result['metrics']) for result in repetitions.values()))
         names = set.union(*(set(result['metrics']) for result in repetitions.values()))
-        if any(not name.startswith(SUCCESS_LATENCY_PREFIXES) for name in names - common_names):
+        if any(not name.startswith(OPTIONAL_LATENCY_PREFIXES) for name in names - common_names):
             raise ValueError(f'{profile}/{users}/{mode}: métricas diferentes entre repetições.')
         groups.append({
             'profile': profile, 'virtual_users': users, 'cache_mode': mode,
@@ -163,7 +177,8 @@ def consolidate(runs):
                       'metrics_unavailable_in_one_mode': sorted(unpaired)})
     return {
         'schema_version': 2,
-        'protocol_version': 2,
+        'protocol_version': protocol,
+        'navigation_config': json.loads(next(iter(navigation_configs))),
         'scope': 'five_repetitions_per_mode_and_paired_differences',
         'percent_definition': '100 * (cache_on - cache_off) / cache_off, calculado por par antes de resumir',
         'latency_note': 'A média dos p95/p99 das repetições não é o percentil global das requisições.',

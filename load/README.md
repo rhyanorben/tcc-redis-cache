@@ -1,6 +1,8 @@
 # Carga experimental
 
-Para a campanha preparada nas VMs, use o [guia de execução em blocos](../docs/CAMPANHA_EM_BLOCOS.md).
+Para preparar a paginação por visitas, use o [protocolo 3](../docs/PAGINACAO_V3.md).
+A cópia na geradora precisa ser atualizada em uma pasta nova antes de usar o
+[guia de execução em blocos](../docs/CAMPANHA_EM_BLOCOS.md).
 
 Execute os comandos a partir da raiz do repositório. Python 3 e Node.js bastam para validar
 e preparar arquivos. A execução real usa Docker com k6 **1.6.0**, fixado também por digest
@@ -15,9 +17,12 @@ o volume da base. Erro de escrita interrompe a execução; o aquecimento exige r
 Erros HTTP de leitura são registrados como desfechos de carga, sem invalidar automaticamente
 o caso. Resposta HTTP 200 com corpo fora do contrato invalida e interrompe a execução.
 
-As consultas usam páginas de 20 pedidos, ordenadas por `criadoEm DESC, id DESC`. Para cada
-empresa, 80% das leituras escolhem as primeiras 200 das 1.000 páginas; as demais escolhem as
-outras 800. Cada bloco completo de 100 operações contém a proporção planejada de escritas;
+As consultas usam páginas de 20 pedidos, ordenadas por `criadoEm DESC, id DESC`.
+Cada visita começa em 0 e contém de 4 a 8 leituras bem-sucedidas. Em 90% das visitas
+esperadas, a navegação avança, com 10% de chance de retorno local quando possível;
+em 10%, abre 0, vai à última e retorna. Uma falha mantém a página para a próxima leitura.
+Os parâmetros estão em `navigation.json`; são hipóteses de uso e ficam registrados no plano.
+Cada bloco completo de 100 operações contém a proporção planejada de escritas;
 o último bloco pode ficar incompleto. Sementes pareadas reproduzem as decisões por VU,
 mas a duração fixa pode gerar quantidades de requisições diferentes entre modos.
 
@@ -71,7 +76,7 @@ ficam no diretório da execução; falhas geram `invalid.json` e interrompem o r
 python3 load/resumir.py --resultados results/campanha-exp-001 \
   --saida results/consolidacao-exp-001
 python3 -m unittest discover -s load/tests -v
-node --test load/tests/workload.test.js
+node --test load/tests/*.test.js
 ```
 
 A consolidação exige cinco repetições nos dois modos de cada cenário presente, além de
@@ -81,3 +86,7 @@ pode ser consolidado, mas somente os 20 cenários completos representam a campan
 Os arquivos gerados são `summary.json`, `groups.csv` e `paired.csv`, com média, mediana,
 desvio padrão amostral e diferenças pareadas. Média de p95/p99 por repetição não é percentil
 global. Métricas disponíveis em apenas um modo ficam identificadas no JSON.
+
+O protocolo 3 acrescenta contagens de visitas e contagens, erros e latências por classe
+de página. Classes não visitadas não recebem latência zero. Resultados dos protocolos
+2 e 3 continuam legíveis separadamente; a consolidação recusa misturá-los.
